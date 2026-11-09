@@ -1,0 +1,4 @@
+playwright>=1.50,<2
+PyMuPDF>=1.24,<2
+certifi>=2026.10.19
+olefile>=0.47,<1
