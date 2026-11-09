@@ -1,6 +1,6 @@
 # 给 AI 的用法：kytdl 命令行
 
-在项目目录下运行 `kytdl <命令> --json`（即 `kytdl.cmd`，等同 `.venv\Scripts\python.exe kytdl.py`）。
+在项目目录下运行 `kytdl <命令> --json`（即 `kytdl.cmd`，等同在项目目录运行 `.venv\Scripts\python.exe -m ablesci`）。
 输出是 JSON；退出码 0 = 正常，1 = 有事要用户决定或业务错误，2 = 服务没运行（先 `kytdl start`），3 = 没有权限（先 `kytdl ai on`）。
 
 ## 原则
