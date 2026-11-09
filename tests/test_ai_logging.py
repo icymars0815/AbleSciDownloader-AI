@@ -10,11 +10,11 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-import app_info
-import applog
-from ai_service import AIService, PRESETS, validate_base_url
-from app import make_server
-from credential_vault import AIKeyVault
+from ablesci.server import app_info
+from ablesci.system import applog
+from ablesci.papers.ai_service import AIService, PRESETS, validate_base_url
+from ablesci.server.app import make_server
+from ablesci.website.credential_vault import AIKeyVault
 
 KEY = "fictional-test-key-ABCD1234"
 
@@ -88,7 +88,7 @@ class KeyHandlingTests(unittest.TestCase):
 
     def test_connection_test_lists_models_only_and_sends_no_content(self):
         service = AIService()
-        with patch("ai_service.build_opener") as opener:
+        with patch("ablesci.papers.ai_service.build_opener") as opener:
             opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps({"data": [{"id": "m1"}, {"id": "m2"}]}).encode()
             result = service.test_connection(KEY, "custom", "https://api.example.com/v1", "m1")
             request = opener.return_value.open.call_args.args[0]
@@ -99,7 +99,7 @@ class KeyHandlingTests(unittest.TestCase):
             self.assertNotIn(KEY, json.dumps(result))
 
     def test_key_only_goes_to_configured_host_and_redirect_refused(self):
-        from ai_service import NoRedirect
+        from ablesci.papers.ai_service import NoRedirect
         with self.assertRaises(ValueError):
             NoRedirect().redirect_request(None, None, 302, "Found", {}, "https://evil.test/")
 
@@ -107,7 +107,7 @@ class KeyHandlingTests(unittest.TestCase):
         from urllib.error import URLError
         service = AIService()
         service.configure(True, KEY, consent=True)
-        with patch("ai_service.build_opener") as opener:
+        with patch("ablesci.papers.ai_service.build_opener") as opener:
             opener.return_value.open.side_effect = URLError("down")
             with self.assertRaises(ValueError):
                 service.analyze_report("report text", True)
@@ -119,7 +119,7 @@ class KeyHandlingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             service.organize_text(["Some Title. Journal 2020"], False)
         reply = {"choices": [{"message": {"content": json.dumps({"records": [{"title": "Some Title", "authors": ["A B"], "doi": "10.9999/invented"}]})}}]}
-        with patch("ai_service.build_opener") as opener:
+        with patch("ablesci.papers.ai_service.build_opener") as opener:
             opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(reply).encode()
             result = service.organize_text(["Some Title. Journal 2020"], True)
             sent = opener.return_value.open.call_args.args[0].data.decode()
@@ -225,7 +225,7 @@ class ServerTests(unittest.TestCase):
         self.server.store.log.write("ai", "x", "ok", message="Bearer " + KEY)
         logs = "".join(p.read_text("utf-8") for p in (Path(self.temp.name) / "logs").glob("*.log"))
         self.assertNotIn(KEY, logs)
-        with patch("ai_service.build_opener") as opener:
+        with patch("ablesci.papers.ai_service.build_opener") as opener:
             opener.return_value.open.return_value.__enter__.return_value.read.return_value = b'{"data": []}'
             result = self.post("ai/test", {"api_key": "", "provider": "custom", "base_url": "https://api.example.com/v1"})
         self.assertTrue(result["ok"])

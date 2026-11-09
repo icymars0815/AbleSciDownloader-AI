@@ -4,9 +4,9 @@ import unittest
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
-from paste_parser import parse_references
-from import_files import import_file
-from credential_vault import CredentialVault
+from ablesci.papers.paste_parser import parse_references
+from ablesci.papers.import_files import import_file
+from ablesci.website.credential_vault import CredentialVault
 
 
 class SmartPasteTests(unittest.TestCase):

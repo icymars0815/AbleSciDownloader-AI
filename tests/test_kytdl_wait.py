@@ -1,6 +1,6 @@
 import unittest
 
-from kytdl_client import item_states
+from ablesci.cli.kytdl_client import item_states
 
 
 class OaWaitStateTests(unittest.TestCase):

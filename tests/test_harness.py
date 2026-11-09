@@ -14,10 +14,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
-import intake
-import kytdl
-from core import seed_demo
-from kytdl_client import Client
+from ablesci.flow import intake
+from ablesci.cli import kytdl
+from ablesci.flow.core import seed_demo
+from ablesci.cli.kytdl_client import Client
 
 EXPECTED_TOOLS = {
     "workbench_status", "list_accounts", "switch_account", "list_papers", "preview_references", "import_references", "query_public_metadata", "search_literature",
@@ -34,7 +34,7 @@ class WarningTests(unittest.TestCase):
             server = start(folder)
             try:
                 client = Client("http://127.0.0.1:%d" % server.server_port, token_path=server.store.root / ".token")
-                from kytdl_client import ApiError
+                from ablesci.cli.kytdl_client import ApiError
                 for bad in ({"title": None, "doi": None}, {"title": "x", "authors": "not a list"}, "not an object"):
                     with self.assertRaises(ApiError):
                         client.post("/api/import", {"records": [{"title": "valid"}, bad]})
@@ -176,11 +176,11 @@ class CliTests(unittest.TestCase):
 
     def test_cli_script_runs_as_subprocess(self):
         env = dict(os.environ, ABLESCI_LOCAL_URL=self.base)
-        done = subprocess.run([sys.executable, str(ROOT / "kytdl.py"), "status", "--json"], env=env, capture_output=True, text=True, timeout=60, cwd=ROOT)
+        done = subprocess.run([sys.executable, "-m", "ablesci", "status", "--json"], env=env, capture_output=True, text=True, timeout=60, cwd=ROOT)
         self.assertEqual(0, done.returncode, done.stderr)
         self.assertTrue(json.loads(done.stdout)["running"])
         env["ABLESCI_LOCAL_URL"] = "http://127.0.0.1:1"
-        done = subprocess.run([sys.executable, str(ROOT / "kytdl.py"), "status"], env=env, capture_output=True, text=True, timeout=60, cwd=ROOT)
+        done = subprocess.run([sys.executable, "-m", "ablesci", "status"], env=env, capture_output=True, text=True, timeout=60, cwd=ROOT)
         self.assertEqual(2, done.returncode)
 
 

@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
-from literature_search import search_pubmed, search_works
+from ablesci.papers.literature_search import search_pubmed, search_works
 
 
 class SearchTests(unittest.TestCase):
@@ -12,7 +12,7 @@ class SearchTests(unittest.TestCase):
             "authorships": [{"author": {"display_name": "Researcher"}}], "publication_year": 2025,
             "primary_location": {"source": {"display_name": "Journal"}}, "open_access": {"is_oa": True},
             "cited_by_count": 7, "is_retracted": False}]}
-        with patch.dict("os.environ", {"OPENALEX_API_KEY": "example"}), patch("literature_search.get_json", return_value=data) as get:
+        with patch.dict("os.environ", {"OPENALEX_API_KEY": "example"}), patch("ablesci.papers.literature_search.get_json", return_value=data) as get:
             result = search_works("gut AND fiber", "abc+/=", 2020, 2026, True, 10)
         params = parse_qs(urlparse(get.call_args.args[0]).query)
         self.assertEqual(["abc+/="], params["cursor"])
@@ -22,7 +22,7 @@ class SearchTests(unittest.TestCase):
         self.assertEqual("abc+/=", result["next_cursor"])
 
     def test_invalid_inputs_do_not_call_network(self):
-        with patch("literature_search.get_json") as get:
+        with patch("ablesci.papers.literature_search.get_json") as get:
             for kwargs in ({"query": ""}, {"query": "x", "page_size": 101},
                            {"query": "x", "year_from": 2026, "year_to": 2020},
                            {"query": "x", "cursor": "z" * 4097}):
@@ -30,12 +30,12 @@ class SearchTests(unittest.TestCase):
             get.assert_not_called()
 
     def test_network_error_does_not_reveal_key(self):
-        with patch.dict("os.environ", {"OPENALEX_API_KEY": "secret-key"}), patch("literature_search.get_json", side_effect=Exception("secret-key")):
+        with patch.dict("os.environ", {"OPENALEX_API_KEY": "secret-key"}), patch("ablesci.papers.literature_search.get_json", side_effect=Exception("secret-key")):
             with self.assertRaises(ValueError) as exc: search_works("x")
         self.assertNotIn("secret-key", str(exc.exception))
 
     def test_semantic_query_and_anonymous_paging_limits(self):
-        with patch.dict("os.environ", {}, clear=True), patch("literature_search.get_json", return_value={"meta": {}, "results": []}) as get:
+        with patch.dict("os.environ", {}, clear=True), patch("ablesci.papers.literature_search.get_json", return_value={"meta": {}, "results": []}) as get:
             result = search_works("dietary compounds and microbial metabolism", mode="semantic", page_size=20, year_from=2021, year_to=2025)
             self.assertIn("search.semantic", parse_qs(urlparse(get.call_args.args[0]).query))
             self.assertIn("publication_year:2021-2025", parse_qs(urlparse(get.call_args.args[0]).query)["filter"])
@@ -53,7 +53,7 @@ class PubMedTests(unittest.TestCase):
                           "222": {"title": "Retracted thing", "pubdate": "2020", "authors": [], "articleids": [], "pubtype": ["Retracted Publication"]}}}
 
     def test_query_passed_unchanged_and_records_mapped(self):
-        with patch("literature_search.get_json", side_effect=[self.SEARCH, self.SUMMARY]) as get, patch("literature_search.time.sleep"):
+        with patch("ablesci.papers.literature_search.get_json", side_effect=[self.SEARCH, self.SUMMARY]) as get, patch("ablesci.papers.literature_search.time.sleep"):
             result = search_pubmed("enterococcus[MeSH] AND optrA[tiab]", year_from=2010, year_to=2020, open_access=True, page_size=2)
         first = parse_qs(urlparse(get.call_args_list[0].args[0]).query)
         self.assertEqual(["enterococcus[MeSH] AND optrA[tiab] AND free full text[sb]"], first["term"])
@@ -66,7 +66,7 @@ class PubMedTests(unittest.TestCase):
         self.assertEqual("2", result["next_cursor"])
 
     def test_invalid_inputs_do_not_call_network(self):
-        with patch("literature_search.get_json") as get:
+        with patch("ablesci.papers.literature_search.get_json") as get:
             for kwargs in ({"query": ""}, {"query": "x", "cursor": "abc"}, {"query": "x", "page_size": 0}, {"query": "x", "year_from": 2026, "year_to": 2020}):
                 with self.assertRaises(ValueError):
                     search_pubmed(**kwargs)

@@ -94,6 +94,23 @@ kytdl ai on          :: 显示 AI 接管规则；你同意后：kytdl ai on --co
 
 ## 开发
 
+目录结构：
+
+```
+AbleSciDownloader-AI/
+├─ kytdl.cmd / install.cmd    入口：命令行、一步安装
+├─ ablesci/                   全部代码（python -m ablesci <命令> 等同 kytdl）
+│  ├─ cli/        kytdl 命令行与本机接口客户端
+│  ├─ server/     后台服务（只监听 127.0.0.1）与各接口路由
+│  ├─ flow/       流程：队列存储、自动流程、后台监控、收件箱通知、设置与花费上限
+│  ├─ website/    科研通网页操作：登录、发布、下载、采纳/驳回规则、账户与凭据
+│  ├─ papers/     文献：免费全文、书目核对、文献检索、清单导入、Zotero
+│  └─ system/     日志、开机自启、单实例锁、Python/浏览器路径
+├─ tests/                     单元测试（只用临时数据和虚构文献）
+├─ docs/CLI_FOR_AI.md         给 AI 的用法
+└─ data/                      运行时生成：你的队列、PDF、登录信息、日志（不进版本库）
+```
+
 ```bat
 .venv\Scripts\python.exe -m unittest discover -s tests
 ```

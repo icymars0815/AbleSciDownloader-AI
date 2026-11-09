@@ -4,11 +4,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pymupdf
-from accounts import Accounts
-from core import Store
-from browser_agent import BrowserAgent
-from task_states import workflow_state
-from ai_service import AIService
+from ablesci.website.accounts import Accounts
+from ablesci.flow.core import Store
+from ablesci.website.browser_agent import BrowserAgent
+from ablesci.flow.task_states import workflow_state
+from ablesci.papers.ai_service import AIService
 
 
 class AccountTests(unittest.TestCase):
@@ -120,7 +120,7 @@ class AISettingsTests(unittest.TestCase):
 
     def test_per_call_consent_required(self):
         self.service.configure(True, "fictional-ds-key", consent=True)
-        with patch("ai_service.build_opener") as network:
+        with patch("ablesci.papers.ai_service.build_opener") as network:
             with self.assertRaises(ValueError): self.service.recognize("unused.pdf", [0], False)
             network.assert_not_called()
 
@@ -135,7 +135,7 @@ class AISettingsTests(unittest.TestCase):
             path = Path(folder) / "private-path.pdf"
             doc = pymupdf.open();doc.new_page().insert_text((50,50),"Fictional software fixture");doc.save(path);doc.close()
             payload = {"choices": [{"message": {"content": json.dumps({"title": "Fictional title", "doi": "10.1234/fiction", "authors": ["Alice Smith"], "abstract": "", "evidence": ["Fictional title"]})}}]}
-            with patch("ai_service.build_opener") as opener:
+            with patch("ablesci.papers.ai_service.build_opener") as opener:
                 opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(payload).encode()
                 result = self.service.recognize(path, [0], True)
                 request = opener.return_value.open.call_args.args[0]

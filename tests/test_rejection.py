@@ -1,5 +1,5 @@
 import unittest
-from rejection_policy import rejection_decision, REJECTION_RULES_VERSION
+from ablesci.website.rejection_policy import rejection_decision, REJECTION_RULES_VERSION
 
 
 class RejectionTests(unittest.TestCase):

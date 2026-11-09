@@ -6,15 +6,15 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import intake
-import monitor as mon
-import publish_policy as pp
-import settings
-from accounts import Accounts
-from core import Store
-from instance_lock import AlreadyRunning, InstanceLock
-from notifications import Notifier
-from pipeline import Pipeline
+from ablesci.flow import intake
+from ablesci.flow import monitor as mon
+from ablesci.website import publish_policy as pp
+from ablesci.flow import settings
+from ablesci.website.accounts import Accounts
+from ablesci.flow.core import Store
+from ablesci.system.instance_lock import AlreadyRunning, InstanceLock
+from ablesci.flow.notifications import Notifier
+from ablesci.flow.pipeline import Pipeline
 from tests.helpers import FakeAgent, PublishBase, lookup_text
 
 SMART = dict(smart_mode=True, smart_rules=settings.SMART_RULES, mcp_website_actions=True, mcp_actions_account="default",
@@ -270,7 +270,7 @@ class CliTests(unittest.TestCase):
         import contextlib
         import io
         import json
-        import kytdl
+        from ablesci.cli import kytdl
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             code = kytdl.main(list(argv) + ["--json"], client)
@@ -297,7 +297,7 @@ class AiVerifyTests(PipelineBase):
     def setUp(self):
         super().setUp()
         import hashlib
-        from mcp_api import McpApi
+        from ablesci.server.mcp_api import McpApi
         folder = Path(self.temp.name) / "downloads"
         folder.mkdir(exist_ok=True)
         (folder / "p.pdf").write_bytes(b"%PDF-1.4 fixture")
@@ -317,14 +317,14 @@ class AiVerifyTests(PipelineBase):
         return self.api.handle("ai-verify", dict(base, **body))
 
     def test_pass_lets_the_background_flow_adopt(self):
-        from pipeline import ai_adopt_ok
+        from ablesci.flow.pipeline import ai_adopt_ok
         self.assertTrue(self.verify()["passed"])
         self.assertTrue(ai_adopt_ok(self.store.get(self.iid)))
         planned = self.pipeline.tick_mcp_authorized()
         self.assertEqual(("adopt", self.iid), (planned["action"], planned["item_id"]))
 
     def test_wrong_doi_or_title_fails(self):
-        from pipeline import ai_adopt_ok
+        from ablesci.flow.pipeline import ai_adopt_ok
         self.assertFalse(self.verify(doi="10.1016/j.other.2024.1")["passed"])
         self.assertFalse(ai_adopt_ok(self.store.get(self.iid)))
         self.assertFalse(self.verify(title="Something else entirely")["passed"])
@@ -341,7 +341,7 @@ class AiVerifyTests(PipelineBase):
             self.verify()
 
     def test_bibliographic_mismatch_is_never_overridden(self):
-        from pipeline import ai_adopt_ok
+        from ablesci.flow.pipeline import ai_adopt_ok
         self.store.update(self.iid, verification=dict(status="review", sha256=self.sha, bibliography=dict(status="mismatch")))
         self.assertFalse(self.verify()["passed"])
         self.assertFalse(ai_adopt_ok(self.store.get(self.iid)))
@@ -385,7 +385,7 @@ class ScanTests(unittest.TestCase):
 
 class FeeBookkeepingTests(unittest.TestCase):
     def agent(self, points, minutes_ago):
-        from agent_download import DownloadMixin
+        from ablesci.website.agent_download import DownloadMixin
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         holder = DownloadMixin()
@@ -402,7 +402,7 @@ class FeeBookkeepingTests(unittest.TestCase):
 
 class CliFlowTests(unittest.TestCase):
     def test_get_row(self):
-        import kytdl
+        from ablesci.cli import kytdl
         rows = {}
         self.assertEqual(("done", True), kytdl.get_row(dict(id="a", stage="done"), None, rows, 0))
         self.assertEqual(("needs_points", True), kytdl.get_row(dict(id="a", stage="queued"), dict(phase="awaiting_confirmation"), rows, 0))
@@ -416,7 +416,7 @@ class CliFlowTests(unittest.TestCase):
         import contextlib
         import io
         import json
-        import kytdl
+        from ablesci.cli import kytdl
 
         class Client:
             def __init__(self):
@@ -472,7 +472,7 @@ class CliExtraTests(unittest.TestCase):
     def test_pages_login_sync_post_the_right_routes(self):
         import contextlib
         import io
-        import kytdl
+        from ablesci.cli import kytdl
 
         class Client:
             def __init__(self):
@@ -529,7 +529,7 @@ class LockTests(unittest.TestCase):
 
     def test_real_process_identity(self):
         import os
-        from instance_lock import process_identity
+        from ablesci.system.instance_lock import process_identity
         own = process_identity(os.getpid())
         self.assertIsNotNone(own)
         self.assertIn("python", own[0])
@@ -556,7 +556,7 @@ class SimpleSetupTests(unittest.TestCase):
         self.assertEqual("popup", settings.oa_challenge_mode(dict(oa_challenge_mode="popup"), "other"))
 
     def test_status_lists_only_real_blockers(self):
-        import kytdl
+        from ablesci.cli import kytdl
 
         class Client:
             def __init__(self, on, attention):
@@ -582,7 +582,7 @@ class Utf8OutputTests(unittest.TestCase):
         import json
         import sys
         from unittest.mock import patch
-        import kytdl
+        from ablesci.cli import kytdl
         fake = io.TextIOWrapper(io.BytesIO(), encoding="gbk")
         with patch.object(sys, "stdout", fake):
             text = kytdl.json_text(dict(title="Łódź 研究 \U0001F600"))
@@ -607,7 +607,7 @@ class RealRun3Tests(unittest.TestCase):
                     verification=verification)
 
     def test_free_file_with_matching_doi_and_title_is_kept(self):
-        from pipeline import oa_auto_keep_ok
+        from ablesci.flow.pipeline import oa_auto_keep_ok
         self.assertTrue(oa_auto_keep_ok(self.oa_item()))
         self.assertFalse(oa_auto_keep_ok(self.oa_item(status="conflict", primary_dois=["10.4014/jmb.2203.03018"])))
         self.assertFalse(oa_auto_keep_ok(self.oa_item(primary_dois=[])))
@@ -616,7 +616,7 @@ class RealRun3Tests(unittest.TestCase):
         self.assertFalse(oa_auto_keep_ok(self.oa_item(bibliography=dict(status="unverified", title_status="match", author_status="mismatch"))))
 
     def test_get_waits_for_the_background_auto_confirm(self):
-        import kytdl
+        from ablesci.cli import kytdl
         item = dict(id="x", stage="queued", request_reward=10)
         batch = dict(phase="awaiting_confirmation")
         self.assertEqual(("screening", False), kytdl.get_row(item, batch, {}, 0, auto=10))
@@ -627,7 +627,7 @@ class RealRun3Tests(unittest.TestCase):
     def test_resolve_needs_confirmation_and_posts_the_right_route(self):
         import contextlib
         import io
-        import kytdl
+        from ablesci.cli import kytdl
 
         class Client:
             posts = []
@@ -659,7 +659,7 @@ class InboxDedupTests(unittest.TestCase):
 
 class AcquisitionLabelTests(unittest.TestCase):
     def test_an_accepted_partial_match_file_is_reported_as_obtained(self):
-        from pipeline import acquisition_state
+        from ablesci.flow.pipeline import acquisition_state
         kept = dict(id="o", source="import", status="checked", done_via="oa", pdf="oa/o.pdf", verification=dict(status="review"))
         self.assertEqual("file_available", acquisition_state(kept)["code"])
         waiting = dict(kept, status="oa_review", done_via=None)

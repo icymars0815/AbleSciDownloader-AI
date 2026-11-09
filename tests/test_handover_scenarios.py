@@ -12,14 +12,14 @@ from urllib.request import Request, urlopen
 
 import pymupdf
 
-import deletion
-import metadata
-from accounts import Accounts
-from app import make_server
-from monitor import Monitor
-from notifications import Notifier
-from pipeline import PIPELINE_RULES_VERSION, Pipeline, gate, next_step, stage_of
-from rejection_policy import REJECTION_RULES_VERSION, manual_reason, rejection_decision
+from ablesci.flow import deletion
+from ablesci.papers import metadata
+from ablesci.website.accounts import Accounts
+from ablesci.server.app import make_server
+from ablesci.flow.monitor import Monitor
+from ablesci.flow.notifications import Notifier
+from ablesci.flow.pipeline import PIPELINE_RULES_VERSION, Pipeline, gate, next_step, stage_of
+from ablesci.website.rejection_policy import REJECTION_RULES_VERSION, manual_reason, rejection_decision
 from tests import helpers as hp
 
 TITLE = "Citrus flavonoids modulate gut microbiota in healthy adults"
@@ -623,7 +623,7 @@ if __name__ == "__main__":
 
 class GateIgnoresFinishedRequests(unittest.TestCase):
     def test_finished_request_with_failed_download_does_not_lock(self):
-        from pipeline import DONE
+        from ablesci.flow.pipeline import DONE
         item = dict(id="x", source="website", status="attention", website_status=DONE[0],
                     assist_url="https://www.ablesci.com/assist/detail?id=X", download_attempts=[{"line": 1}])
         self.assertFalse(gate([item], 312)["blocked"])

@@ -7,12 +7,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.request import Request, urlopen
 
-import download_lines as dl
-from app import make_server
-from core import Store
-from download_policy import RULES_VERSION, validate_download_settings, download_settings
-from pipeline import Pipeline, stage_of
-from accounts import Accounts
+from ablesci.website import download_lines as dl
+from ablesci.server.app import make_server
+from ablesci.flow.core import Store
+from ablesci.website.download_policy import RULES_VERSION, validate_download_settings, download_settings
+from ablesci.flow.pipeline import Pipeline, stage_of
+from ablesci.website.accounts import Accounts
 from tests import helpers as hp
 
 
@@ -115,14 +115,14 @@ class AgentTests(hp.DownloadHarness, unittest.TestCase):
         super().setUp()
 
     def test_original_filename_is_kept_under_item_folder(self):
-        from browser_agent import BrowserAgent
+        from ablesci.website.browser_agent import BrowserAgent
         agent = BrowserAgent.__new__(BrowserAgent)
         agent.store, agent.stop = self.store, threading.Event()
         agent.reject = MagicMock()
         download = MagicMock()
         download.suggested_filename = 'Smith 2020: "Citrus" <v2>.pdf'
         download.save_as.side_effect = lambda path: Path(path).write_bytes(b"%PDF-1.4 x")
-        with patch("agent_download.verify_with_metadata", return_value=dict(status="review", reason="x", sha256="y")):
+        with patch("ablesci.website.agent_download.verify_with_metadata", return_value=dict(status="review", reason="x", sha256="y")):
             agent.save_download(self.item, download, "Paper", "10.1234/ok")
         after = self.store.get(self.item)
         self.assertEqual('Smith 2020_ _Citrus_ _v2_.pdf', after["local_filename"])
@@ -132,7 +132,7 @@ class AgentTests(hp.DownloadHarness, unittest.TestCase):
         # a second save of the same name never overwrites
         download.suggested_filename = after["original_filename"]
         self.store.update(self.item, status="downloading")
-        with patch("agent_download.verify_with_metadata", return_value=dict(status="review", reason="x", sha256="y")):
+        with patch("ablesci.website.agent_download.verify_with_metadata", return_value=dict(status="review", reason="x", sha256="y")):
             with self.assertRaises(ValueError):
                 agent.save_download(self.item, download, "Paper", "10.1234/ok")
 
@@ -211,7 +211,7 @@ class TitleAndCoreTests(unittest.TestCase):
 
     def test_doi_only_import_gets_title_and_authors(self):
         item_id = self.store.add("", "10.1234/oa.test", account_id="default")
-        with patch("pipeline.fetch_metadata", return_value=self.RECORD) as fetched:
+        with patch("ablesci.flow.pipeline.fetch_metadata", return_value=self.RECORD) as fetched:
             self.pipeline.fill_from_metadata(item_id, "me@example.org")
         fetched.assert_called_once_with("10.1234/oa.test", self.store.root, "me@example.org")
         item = self.store.get(item_id)
@@ -220,13 +220,13 @@ class TitleAndCoreTests(unittest.TestCase):
 
     def test_existing_title_is_not_replaced_and_no_lookup(self):
         item_id = self.store.add("My own title", "10.1234/oa.test", account_id="default")
-        with patch("pipeline.fetch_metadata") as fetched:
+        with patch("ablesci.flow.pipeline.fetch_metadata") as fetched:
             self.assertIsNone(self.pipeline.fill_from_metadata(item_id))
         fetched.assert_not_called()
 
     def test_unavailable_metadata_leaves_item_alone(self):
         item_id = self.store.add("", "10.1234/oa.test", account_id="default")
-        with patch("pipeline.fetch_metadata", return_value=dict(status="unavailable")):
+        with patch("ablesci.flow.pipeline.fetch_metadata", return_value=dict(status="unavailable")):
             self.assertIsNone(self.pipeline.fill_from_metadata(item_id))
         self.assertEqual("", self.store.get(item_id)["title"])
 
@@ -245,8 +245,8 @@ class TitleAndCoreTests(unittest.TestCase):
         def verify(path, title, doi, root, **kwargs):
             verified.update(title=title, **kwargs)
             return dict(status="identity_match", sha256="x")
-        with patch("pipeline.fetch_metadata", return_value=self.RECORD), patch("oa_fetch.fetch_open_access", fetch), \
-                patch("pipeline.verify_with_metadata", verify):
+        with patch("ablesci.flow.pipeline.fetch_metadata", return_value=self.RECORD), patch("ablesci.papers.oa_fetch.fetch_open_access", fetch), \
+                patch("ablesci.flow.pipeline.verify_with_metadata", verify):
             self.pipeline.oa_run(item_id)
         self.assertEqual("CORE-SECRET-123", seen["core_api_key"])
         self.assertEqual(self.store.root, seen["cache_root"])

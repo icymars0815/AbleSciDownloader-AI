@@ -1,6 +1,9 @@
 @echo off
-set "APP_PY=%~dp0runtime\python\python.exe"
-if not exist "%APP_PY%" set "APP_PY=%~dp0.venv\Scripts\python.exe"
+rem kytdl <command> [--json]  -  runs python -m ablesci from this folder's .venv
+set "APP_ROOT=%~dp0"
+set "APP_PY=%APP_ROOT%.venv\Scripts\python.exe"
+if not exist "%APP_PY%" set "APP_PY=%APP_ROOT%runtime\python\python.exe"
 if not exist "%APP_PY%" set "APP_PY=python"
-"%APP_PY%" "%~dp0kytdl.py" %*
+set "PYTHONPATH=%APP_ROOT%;%PYTHONPATH%"
+"%APP_PY%" -m ablesci %*
 exit /b %ERRORLEVEL%

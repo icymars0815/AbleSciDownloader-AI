@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pymupdf
 
-from core import verify_pdf
+from ablesci.flow.core import verify_pdf
 
 DOI = "10.1234/layout.fixture"
 TITLE = "Synthetic layout fixture for comparison checks"
@@ -110,7 +110,7 @@ class AbstractLayoutTests(unittest.TestCase):
         self.assertNotEqual("difference", c["status"])
 
     def test_list_and_string_inputs_are_accepted(self):
-        from core import compare_metadata
+        from ablesci.flow.core import compare_metadata
         text = "\n".join(HEAD) + "\nABSTRACT\n" + ABSTRACT
         a = compare_metadata(text, text, DOI, REFERENCE)
         b = compare_metadata(text, [text, text], DOI, REFERENCE)

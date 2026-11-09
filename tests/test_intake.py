@@ -7,14 +7,14 @@ from unittest.mock import MagicMock
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
-import deletion
-import intake
-from accounts import Accounts
-from app import make_server
-from core import Store
-from notifications import Notifier
-from pipeline import DONE, FULFILLED, WAITING, GATE_TEXT, Pipeline, next_step, stage_of, gate
-from rejection_policy import REJECTION_RULES_VERSION  # noqa: F401  (import check only)
+from ablesci.flow import deletion
+from ablesci.flow import intake
+from ablesci.website.accounts import Accounts
+from ablesci.server.app import make_server
+from ablesci.flow.core import Store
+from ablesci.flow.notifications import Notifier
+from ablesci.flow.pipeline import DONE, FULFILLED, WAITING, GATE_TEXT, Pipeline, next_step, stage_of, gate
+from ablesci.website.rejection_policy import REJECTION_RULES_VERSION  # noqa: F401  (import check only)
 
 NOW = datetime(2026, 10, 19, 12, 0, tzinfo=timezone.utc)
 AUTO = dict(pipeline_auto_publish=True, pipeline_rules_version="2026-10-19-p1")

@@ -5,11 +5,11 @@ import unittest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-import intake
-import publish_policy as pp
-from accounts import Accounts
-from core import Store
-from pipeline import Pipeline, PIPELINE_RULES_VERSION, stage_of
+from ablesci.flow import intake
+from ablesci.website import publish_policy as pp
+from ablesci.website.accounts import Accounts
+from ablesci.flow.core import Store
+from ablesci.flow.pipeline import Pipeline, PIPELINE_RULES_VERSION, stage_of
 from tests import helpers as hp
 from tests.helpers import FakeAgent
 from tests.helpers import DETAIL, DOI, TITLE, El, PublishBase
@@ -85,7 +85,7 @@ class UndefinedLookupTests(PublishBase):
 
 
 def pp_minutes():
-    from browser_agent import BrowserAgent
+    from ablesci.website.browser_agent import BrowserAgent
     return BrowserAgent.LOOKUP_RETRY_MINUTES
 
 
@@ -224,7 +224,7 @@ class SyncReadsPointsTests(unittest.TestCase):
     def test_sync_reads_points_from_form_when_list_page_has_none(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        from browser_agent import BrowserAgent
+        from ablesci.website.browser_agent import BrowserAgent
         store = Store(temp.name)
         agent = BrowserAgent(store, Accounts(temp.name))
         self.addCleanup(agent.thread.join, 0.1)
@@ -246,7 +246,7 @@ class SilentModeTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.store = Store(self.temp.name)
         self.toasts = []
-        from notifications import Notifier
+        from ablesci.flow.notifications import Notifier
         self.notifier = Notifier(self.store, sink=lambda t, m: self.toasts.append(t))
 
     def test_mcp_item_is_silent_but_recorded(self):

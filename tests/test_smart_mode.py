@@ -3,9 +3,9 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 
-import publish_policy as pp
-import settings
-from pipeline import next_step
+from ablesci.website import publish_policy as pp
+from ablesci.flow import settings
+from ablesci.flow.pipeline import next_step
 from tests import helpers as hp
 from tests.helpers import PublishBase, lookup_text
 
@@ -49,7 +49,7 @@ class SpendCapTests(unittest.TestCase):
     def test_ledger_and_cap(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        from core import Store
+        from ablesci.flow.core import Store
         store = Store(temp.name)
         settings.record_spend(store, "default", 10, NOW)
         settings.record_spend(store, "default", 2, NOW)
@@ -93,14 +93,14 @@ class ApiTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.server = hp.start(self.temp.name)
         self.addCleanup(hp.stop, self.server)
-        from kytdl_client import Client
+        from ablesci.cli.kytdl_client import Client
         self.client = Client("http://127.0.0.1:%d" % self.server.server_port, token_path=self.server.store.root / ".token")
 
     def prefs(self):
         return self.server.store.snapshot()["preferences"]
 
     def test_switch_on_and_off_through_the_api(self):
-        from kytdl_client import ApiError
+        from ablesci.cli.kytdl_client import ApiError
         with self.assertRaises(ApiError):
             self.client.post("/api/preferences", {"smart_mode": {"enabled": True}})
         self.assertIn("smart_mode_off", {h["kind"] for h in self.server.mcp_api.do_needs_attention({})["setup"]})

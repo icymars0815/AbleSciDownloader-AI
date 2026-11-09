@@ -1,6 +1,6 @@
 import unittest
 
-from download_policy import RULES_VERSION, TransferWatch, highspeed_allowed, read_progress
+from ablesci.website.download_policy import RULES_VERSION, TransferWatch, highspeed_allowed, read_progress
 
 RULES = "用户积分＜500，高速下载扣 2 积分，同一文件不重复扣分；用户积分≥500，免积分。"
 

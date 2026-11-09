@@ -10,11 +10,11 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from unittest.mock import MagicMock
 
-from accounts import Accounts
-from app import make_server
-from core import Store
-from pipeline import (PIPELINE_RULES_VERSION, Pipeline, acquisition_state, gate, next_step, stage_of, tier, DONE, WAITING, FULFILLED)
-from rejection_policy import REJECTION_RULES_VERSION
+from ablesci.website.accounts import Accounts
+from ablesci.server.app import make_server
+from ablesci.flow.core import Store
+from ablesci.flow.pipeline import (PIPELINE_RULES_VERSION, Pipeline, acquisition_state, gate, next_step, stage_of, tier, DONE, WAITING, FULFILLED)
+from ablesci.website.rejection_policy import REJECTION_RULES_VERSION
 from tests.helpers import AUTO, AgentHarness, FILE, MATCH, NOW, URL, deciding, fulfilled, item, queued, waiting
 
 
@@ -373,7 +373,7 @@ class ArchiveAndActionTests(AgentHarness, unittest.TestCase):
         download.save_as.side_effect = lambda path: Path(path).write_bytes(b"%PDF-1.4 second")
         self.agent.stop.clear()
         from unittest.mock import patch
-        with patch("agent_download.verify_with_metadata", return_value=dict(status="review", reason="x", sha256="y")):
+        with patch("ablesci.website.agent_download.verify_with_metadata", return_value=dict(status="review", reason="x", sha256="y")):
             self.agent.save_download(item_id, download, "Paper", "10.1234/ok")
         self.assertEqual(Path("downloads/%s/answer-2/Original Name.pdf" % item_id), Path(self.store.get(item_id)["pdf"]))
         self.assertEqual(b"%PDF-1.4 fixture", (self.store.root / "downloads" / "one.pdf").read_bytes())

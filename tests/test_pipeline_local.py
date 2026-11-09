@@ -10,12 +10,12 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from accounts import Accounts
-from app import make_server
-from browser_agent import BASE
-from core import Store
-from pipeline import Pipeline, has_session, next_local_step, next_step, stage_of
-from task_states import workflow_state
+from ablesci.website.accounts import Accounts
+from ablesci.server.app import make_server
+from ablesci.website.browser_agent import BASE
+from ablesci.flow.core import Store
+from ablesci.flow.pipeline import Pipeline, has_session, next_local_step, next_step, stage_of
+from ablesci.flow.task_states import workflow_state
 
 NOW = datetime(2026, 10, 19, 12, 0, tzinfo=timezone.utc)
 PDF = b"%PDF-1.7\n" + b"x" * 100
@@ -134,7 +134,7 @@ class SchedulerTests(unittest.TestCase):
             entered.append(doi)
             release.wait(5)
             return dict(status="failed", attempts=[])
-        with patch("oa_fetch.fetch_open_access", slow):
+        with patch("ablesci.papers.oa_fetch.fetch_open_access", slow):
             self.pipeline.tick(NOW)
             self.pipeline.tick(NOW)
             self.pipeline.tick(NOW)
@@ -169,7 +169,7 @@ class OaReviewTests(unittest.TestCase):
         def run(doi, dest, email="", **kwargs):
             Path(dest).write_bytes(PDF)
             return dict(status="downloaded", oa_status="gold", source="OpenAlex", attempts=[])
-        with patch("oa_fetch.fetch_open_access", run), patch("pipeline.verify_with_metadata", lambda *a, **k: dict(status=status, reason="mock", sha256="x")):
+        with patch("ablesci.papers.oa_fetch.fetch_open_access", run), patch("ablesci.flow.pipeline.verify_with_metadata", lambda *a, **k: dict(status=status, reason="mock", sha256="x")):
             self.pipeline.oa_run(self.item)
 
     def test_non_match_is_oa_review_not_attention(self):
@@ -262,7 +262,7 @@ class SessionTests(unittest.TestCase):
             self.assertEqual("prepare", pipeline.plan(NOW)[3]["action"])
 
     def test_successful_login_records_session_evidence(self):
-        from browser_agent import BrowserAgent
+        from ablesci.website.browser_agent import BrowserAgent
         from unittest.mock import MagicMock
         with tempfile.TemporaryDirectory() as temp:
             store = Store(temp)

@@ -10,9 +10,9 @@ from unittest.mock import patch
 
 import pymupdf
 
-from app import make_server
-from core import Store, seed_demo, verify_pdf, site_url, checkin_result
-from download_policy import RULES_VERSION
+from ablesci.server.app import make_server
+from ablesci.flow.core import Store, seed_demo, verify_pdf, site_url, checkin_result
+from ablesci.website.download_policy import RULES_VERSION
 
 
 class VerificationTests(unittest.TestCase):
@@ -95,7 +95,7 @@ class VerificationTests(unittest.TestCase):
 
 class LocalApiTests(unittest.TestCase):
     def setUp(self):
-        self.metadata_patch = patch("metadata.fetch_metadata", return_value={"status": "unavailable", "reason": "offline test"})
+        self.metadata_patch = patch("ablesci.papers.metadata.fetch_metadata", return_value={"status": "unavailable", "reason": "offline test"})
         self.metadata_patch.start()
         self.addCleanup(self.metadata_patch.stop)
         self.temp = tempfile.TemporaryDirectory()

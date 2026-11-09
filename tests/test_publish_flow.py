@@ -8,13 +8,13 @@ from unittest.mock import MagicMock
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-import publish_policy as pp
-from accounts import Accounts
-from app import make_server
-from browser_agent import BASE, BrowserAgent
-from core import Store
-from pipeline import stage_of, next_step
-from rejection_policy import (REJECTION_RULES_VERSION, manual_reason, reject_rules, rejection_decision, user_doi)
+from ablesci.website import publish_policy as pp
+from ablesci.website.accounts import Accounts
+from ablesci.server.app import make_server
+from ablesci.website.browser_agent import BASE, BrowserAgent
+from ablesci.flow.core import Store
+from ablesci.flow.pipeline import stage_of, next_step
+from ablesci.website.rejection_policy import (REJECTION_RULES_VERSION, manual_reason, reject_rules, rejection_decision, user_doi)
 from tests import helpers as hp
 from tests.helpers import DETAIL, DOI, El, FakePage, PublishBase, TITLE, doi_lookup_text, lookup_text
 
@@ -562,7 +562,7 @@ class PopupHandoverTests(unittest.TestCase):
         self.agent.notifier.notify.assert_called()
 
     def test_sync_resolves_handover_from_site_status(self):
-        from pipeline import DONE, WAITING
+        from ablesci.flow.pipeline import DONE, WAITING
         self.store.update(self.item, status="attention", handover=dict(kind="采纳"), pdf="downloads/x.pdf")
         self.agent.resolve_handover(self.item, DONE[0])
         self.assertEqual("adopted", self.store.get(self.item)["status"])

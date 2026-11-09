@@ -8,15 +8,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import browser_agent
-import download_lines as dl
-from accounts import Accounts
-from browser_agent import BASE, BrowserAgent, SessionExpired
-from core import Store
-from download_policy import (DOWNLOAD_DEFAULTS, TransferWatch, download_settings, dynamic_cap, dynamic_cap_for, longer_minutes,
+from ablesci.website import browser_agent
+from ablesci.website import download_lines as dl
+from ablesci.website.accounts import Accounts
+from ablesci.website.browser_agent import BASE, BrowserAgent, SessionExpired
+from ablesci.flow.core import Store
+from ablesci.website.download_policy import (DOWNLOAD_DEFAULTS, TransferWatch, download_settings, dynamic_cap, dynamic_cap_for, longer_minutes,
                              make_watch, validate_download_settings)
-from download_worker import DownloadWorker
-from ratelimit import RateLimiter
+from ablesci.website.download_worker import DownloadWorker
+from ablesci.flow.ratelimit import RateLimiter
 from tests import helpers as hp
 
 MB = 1024 * 1024

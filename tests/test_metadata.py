@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from core import compare_metadata
-from metadata import fetch_metadata, reconstruct_abstract, crossref_record, verify_with_metadata
+from ablesci.flow.core import compare_metadata
+from ablesci.papers.metadata import fetch_metadata, reconstruct_abstract, crossref_record, verify_with_metadata
 
 DOI = "10.1234/local.fixture"
 TITLE = "Synthetic test article on local bibliography verification"
@@ -80,7 +80,7 @@ class MetadataFetchTests(unittest.TestCase):
         self.assertEqual("A B A", reconstruct_abstract({"B": [1], "A": [0, 2]}))
 
     def test_openalex_success_only_transmits_doi(self):
-        with patch("metadata.get_json", return_value=self.raw_openalex()) as query:
+        with patch("ablesci.papers.metadata.get_json", return_value=self.raw_openalex()) as query:
             record = fetch_metadata(DOI, self.temp.name)
         self.assertEqual(["OpenAlex"], record["sources"])
         self.assertEqual(ABSTRACT, record["abstract"])
@@ -89,7 +89,7 @@ class MetadataFetchTests(unittest.TestCase):
         self.assertNotIn("mail", query.call_args_list[0].args[0] + query.call_args_list[1].args[0])
 
     def test_metadata_cache_avoids_repeated_requests(self):
-        with patch("metadata.get_json", return_value=self.raw_openalex()) as query:
+        with patch("ablesci.papers.metadata.get_json", return_value=self.raw_openalex()) as query:
             fetch_metadata(DOI, self.temp.name)
             cached = fetch_metadata(DOI, self.temp.name)
         self.assertEqual(2, query.call_count)
@@ -97,7 +97,7 @@ class MetadataFetchTests(unittest.TestCase):
 
     def test_crossref_fills_missing_abstract_with_source_recorded(self):
         crossref = {"message": {"DOI": DOI, "title": [TITLE], "abstract": "<jats:p>" + ABSTRACT + "</jats:p>"}}
-        with patch("metadata.get_json", side_effect=[self.raw_openalex(False), crossref]):
+        with patch("ablesci.papers.metadata.get_json", side_effect=[self.raw_openalex(False), crossref]):
             record = fetch_metadata(DOI, self.temp.name)
         self.assertEqual("Crossref", record["field_sources"]["abstract"])
         self.assertEqual("OpenAlex", record["field_sources"]["authors"])
@@ -105,13 +105,13 @@ class MetadataFetchTests(unittest.TestCase):
     def test_mismatched_doi_is_rejected(self):
         wrong = self.raw_openalex()
         wrong["doi"] = "https://doi.org/10.1234/wrong"
-        with patch("metadata.get_json", side_effect=[wrong, OSError("unavailable")]):
+        with patch("ablesci.papers.metadata.get_json", side_effect=[wrong, OSError("unavailable")]):
             record = fetch_metadata(DOI, self.temp.name)
         self.assertEqual("unavailable", record["status"])
         self.assertFalse(record.get("authors"))
 
     def test_both_apis_down_preserves_local_verification(self):
-        with patch("metadata.get_json", side_effect=OSError("private proxy credentials must not be logged")):
+        with patch("ablesci.papers.metadata.get_json", side_effect=OSError("private proxy credentials must not be logged")):
             record = fetch_metadata(DOI, self.temp.name)
         self.assertEqual("unavailable", record["status"])
         self.assertNotIn("private proxy", json.dumps(record))
@@ -120,6 +120,6 @@ class MetadataFetchTests(unittest.TestCase):
         self.assertEqual(" Abstract & text ", crossref_record({"message": {"abstract": "<jats:p>Abstract &amp; text</jats:p>"}})["abstract"])
 
     def test_no_doi_makes_no_api_request(self):
-        with patch("metadata.get_json") as query:
+        with patch("ablesci.papers.metadata.get_json") as query:
             self.assertEqual("unavailable", fetch_metadata("", self.temp.name)["status"])
         query.assert_not_called()

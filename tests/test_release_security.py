@@ -10,11 +10,11 @@ import unittest
 import zipfile
 from unittest.mock import Mock, patch
 
-from accounts import Accounts
-from browser_agent import BrowserAgent, PreconditionError
-from core import Store
-from literature_search import search_works
-from pipeline import Pipeline
+from ablesci.website.accounts import Accounts
+from ablesci.website.browser_agent import BrowserAgent, PreconditionError
+from ablesci.flow.core import Store
+from ablesci.papers.literature_search import search_works
+from ablesci.flow.pipeline import Pipeline
 
 
 class ContinuationBoundaryTests(unittest.TestCase):
@@ -99,7 +99,7 @@ class ContinuationBoundaryTests(unittest.TestCase):
 
     def test_monitor_retry_retains_authority_and_cannot_bypass_pause(self):
         from datetime import datetime
-        from monitor import Monitor
+        from ablesci.flow.monitor import Monitor
         monitor = object.__new__(Monitor)
         monitor.store, monitor.accounts, monitor.agent = self.store, self.accounts, self.agent
         monitor.login_required, monitor.inflight = False, False
@@ -125,7 +125,7 @@ class ContinuationBoundaryTests(unittest.TestCase):
 
     def test_stop_api_pauses_mcp_and_global_pipeline(self):
         from test_harness import start, stop
-        from kytdl_client import Client
+        from ablesci.cli.kytdl_client import Client
         with tempfile.TemporaryDirectory() as folder:
             server = start(folder, permission=True)
             try:
@@ -142,7 +142,7 @@ class ContinuationBoundaryTests(unittest.TestCase):
                 stop(server)
 
     def test_confirmed_published_request_can_resume_after_pause(self):
-        from mcp_api import McpApi
+        from ablesci.server.mcp_api import McpApi
         self.store.update(self.iid, source="website", owned=True,
                           assist_url="https://www.ablesci.com/assist/detail?id=F1", website_status="求助中")
         self.pipeline.pause_mcp()
@@ -156,7 +156,7 @@ class ContinuationBoundaryTests(unittest.TestCase):
 
 class SearchBoundaryTests(unittest.TestCase):
     def test_multibyte_query_rejected_before_network_if_encoded_url_too_long(self):
-        with patch("literature_search.get_json") as get:
+        with patch("ablesci.papers.literature_search.get_json") as get:
             with self.assertRaisesRegex(ValueError, "长度上限"):
                 search_works("科研" * 250, api_key="")
             get.assert_not_called()
@@ -164,7 +164,7 @@ class SearchBoundaryTests(unittest.TestCase):
     def test_malformed_nested_public_metadata_does_not_crash(self):
         data = {"meta": [], "results": [{"doi": 123, "primary_location": "bad",
                 "open_access": [], "authorships": [{"author": "bad"}]}]}
-        with patch("literature_search.get_json", return_value=data):
+        with patch("ablesci.papers.literature_search.get_json", return_value=data):
             result = search_works("test", api_key="")
         self.assertEqual("", result["records"][0]["doi"])
         self.assertEqual("", result["records"][0]["journal"])

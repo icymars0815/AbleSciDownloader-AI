@@ -10,11 +10,11 @@ from unittest.mock import patch
 
 import pymupdf
 
-import core
-import metadata
-import oa_fetch
-from core import doi_value, verify_pdf
-from oa_fetch import OAError
+from ablesci.flow import core
+from ablesci.papers import metadata
+from ablesci.papers import oa_fetch
+from ablesci.flow.core import doi_value, verify_pdf
+from ablesci.papers.oa_fetch import OAError
 
 PDF = b"%PDF-1.7\n" + b"x" * 100
 DOI = "10.1234/oa.test"
@@ -87,7 +87,7 @@ class LandingTests(FastClock):
             calls.append(url)
             raise OAError("browser: no PDF captured")
         router = Router(dict({"api.openalex.org": j(self.OPENALEX)}, **routes))
-        with patch("oa_fetch._request", router):
+        with patch("ablesci.papers.oa_fetch._request", router):
             result = oa_fetch.fetch_open_access(DOI, Path(self.temp.name) / "x.pdf", browser=fake_browser)
         return result, router, calls
 
@@ -129,7 +129,7 @@ class LandingTests(FastClock):
                 self.request = request
                 raise OAError("stop")
         opener = Opener()
-        with patch("oa_fetch.build_opener", lambda *h: opener):
+        with patch("ablesci.papers.oa_fetch.build_opener", lambda *h: opener):
             with self.assertRaises(OAError):
                 oa_fetch._request("https://pub.example/article/1", "text/html")
         self.assertNotIn("cookie", {k.lower() for k in opener.request.headers})
@@ -150,7 +150,7 @@ class RetryTests(FastClock):
             if isinstance(item, Exception):
                 raise item
             return item
-        with patch("oa_fetch._request", fake):
+        with patch("ablesci.papers.oa_fetch._request", fake):
             try:
                 return oa_fetch._get("https://a.example/x", "*/*", 10, 5, deadline), calls
             except OAError as exc:
@@ -209,7 +209,7 @@ class RetryTests(FastClock):
     def test_lookup_records_retry_and_download_retries_503(self):
         router = Router({"api.openalex.org": [(OAError("HTTP 503", 503)), j({"open_access": {"is_oa": False}, "locations": []})]})
         router.routes["api.openalex.org"][0].retry_after = 2.0
-        with patch("oa_fetch._request", router):
+        with patch("ablesci.papers.oa_fetch._request", router):
             info = oa_fetch.find_oa_locations(DOI)
         first = info["attempts"][0]
         self.assertTrue(first["retried"] and first["ok"])
@@ -242,7 +242,7 @@ class NormalizeTests(unittest.TestCase):
         works = {"open_access": {"is_oa": True}, "ids": {}, "best_oa_location": {},
                  "locations": [{"pdf_url": u, "landing_page_url": None, "source": {"type": "journal"}} for u in urls] +
                               [{"pdf_url": "https://m%d.example/a.pdf" % i, "landing_page_url": None, "source": {"type": "journal"}} for i in range(9)]}
-        with patch("oa_fetch._request", Router({"api.openalex.org": j(works)})):
+        with patch("ablesci.papers.oa_fetch._request", Router({"api.openalex.org": j(works)})):
             info = oa_fetch.find_oa_locations(DOI)
         got = [c["url"] for c in info["candidates"]]
         self.assertEqual(1, got.count("https://p.example/f.pdf"))
@@ -260,7 +260,7 @@ class PoliteTests(FastClock):
             def open(self, request, timeout=0):
                 agents.append((request.full_url, request.get_header("User-agent")))
                 raise OAError("stop")
-        with patch("oa_fetch.build_opener", lambda *h: Opener()):
+        with patch("ablesci.papers.oa_fetch.build_opener", lambda *h: Opener()):
             oa_fetch.find_oa_locations(DOI, "me@uni.edu")
         by_host = {url.split("/")[2]: ua for url, ua in agents}
         self.assertEqual("KYTDL/1.0 (mailto:me@uni.edu)", by_host["api.openalex.org"])
@@ -272,10 +272,10 @@ class PoliteTests(FastClock):
 
     def test_without_email_nothing_is_sent_and_nothing_logged(self):
         router = Router({"api.openalex.org": j(self.WORK)})
-        with patch("oa_fetch._request", router):
+        with patch("ablesci.papers.oa_fetch._request", router):
             info = oa_fetch.find_oa_locations(DOI)
         self.assertFalse([u for u in router.calls if "mailto" in u or "email" in u or "unpaywall" in u])
-        with patch("oa_fetch._request", Router({})):
+        with patch("ablesci.papers.oa_fetch._request", Router({})):
             info = oa_fetch.find_oa_locations(DOI, "secret@uni.edu")
         self.assertNotIn("secret@uni.edu", json.dumps(info["attempts"]))
         self.assertEqual("", getattr(oa_fetch._ctx, "email", ""))   # context restored afterwards
@@ -286,7 +286,7 @@ class PoliteTests(FastClock):
         def fake(url):
             seen.append((url, getattr(metadata._ctx, "email", "")))
             raise OSError("down")
-        with patch("metadata.get_json", fake):
+        with patch("ablesci.papers.metadata.get_json", fake):
             metadata.fetch_metadata(DOI, self.temp.name, "me@uni.edu")
             metadata.fetch_metadata("10.1234/other", self.temp.name)
         polite, anonymous = seen[:2], seen[2:]
@@ -370,7 +370,7 @@ class VerifyTests(unittest.TestCase):
 
     def test_verify_with_metadata_uses_fetched_flag(self):
         record = dict(self.meta(dict(retracted=True, updates=[], source="OpenAlex")))
-        with patch("metadata.fetch_metadata", lambda *a, **k: record):
+        with patch("ablesci.papers.metadata.fetch_metadata", lambda *a, **k: record):
             result = metadata.verify_with_metadata(self.pdf, TITLE, DOI, self.temp.name)
         self.assertEqual("review", result["status"])
 
@@ -431,7 +431,7 @@ class RetractionRecordTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         openalex = {"doi": "https://doi.org/" + DOI, "title": "T", "authorships": [], "is_retracted": True}
         crossref = {"message": {"DOI": DOI, "title": ["T"], "updated-by": [{"DOI": "10.1234/n", "type": "retraction"}]}}
-        with patch("metadata.get_json", side_effect=[openalex, crossref]) as query:
+        with patch("ablesci.papers.metadata.get_json", side_effect=[openalex, crossref]) as query:
             record = metadata.fetch_metadata(DOI, temp.name)
         self.assertIn("is_retracted", query.call_args_list[0].args[0])
         self.assertEqual("OpenAlex+Crossref", record["retraction"]["source"])
@@ -441,7 +441,7 @@ class RetractionRecordTests(unittest.TestCase):
     def test_unavailable_metadata_has_no_retraction_claim(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        with patch("metadata.get_json", side_effect=OSError("down")):
+        with patch("ablesci.papers.metadata.get_json", side_effect=OSError("down")):
             record = metadata.fetch_metadata(DOI, temp.name)
         self.assertNotIn("retraction", record)
         self.assertIsNone(core.is_retracted(record))
@@ -462,7 +462,7 @@ class CacheTests(FastClock):
 
     def find(self, routes, doi=DOI):
         router = Router(routes)
-        with patch("oa_fetch._request", router):
+        with patch("ablesci.papers.oa_fetch._request", router):
             return oa_fetch.find_oa_locations(doi, cache_root=self.temp.name), router
 
     def test_hit_cached_seven_days(self):
@@ -525,14 +525,14 @@ class CacheTests(FastClock):
         self.assertEqual("publishedVersion", versions["https://pub.example/a.pdf"])
         self.assertEqual("acceptedVersion", versions["https://repo.example/b.pdf"])
         self.assertEqual("publishedVersion", info["version"])
-        with patch("oa_fetch._request", Router({"api.openalex.org": j(self.OA)})):
+        with patch("ablesci.papers.oa_fetch._request", Router({"api.openalex.org": j(self.OA)})):
             lookup = oa_fetch.lookup_only(DOI)
         self.assertEqual("publishedVersion", lookup["version"])
         self.assertEqual("publishedVersion", lookup["links"][0]["version"])
 
     def test_unpaywall_version_and_unknown_version_is_none(self):
         up = {"is_oa": True, "oa_status": "green", "best_oa_location": {"url_for_pdf": "https://r.example/u.pdf", "version": "submittedVersion", "host_type": "repository"}, "oa_locations": []}
-        with patch("oa_fetch._request", Router({"api.unpaywall.org": j(up), "api.openalex.org": j(dict(self.OA, best_oa_location={"pdf_url": "https://p.example/n.pdf", "version": "weird"}, locations=[]))})):
+        with patch("ablesci.papers.oa_fetch._request", Router({"api.unpaywall.org": j(up), "api.openalex.org": j(dict(self.OA, best_oa_location={"pdf_url": "https://p.example/n.pdf", "version": "weird"}, locations=[]))})):
             info = oa_fetch.find_oa_locations(DOI, "me@uni.edu")
         by_url = {c["url"]: c["version"] for c in info["candidates"]}
         self.assertEqual("submittedVersion", by_url["https://r.example/u.pdf"])
@@ -540,7 +540,7 @@ class CacheTests(FastClock):
 
     def test_download_reports_version_of_the_file_that_worked(self):
         router = Router({"api.openalex.org": j(self.OA), "pub.example/a.pdf": OAError("HTTP 404", 404), "repo.example/b.pdf": (200, PDF)})
-        with patch("oa_fetch._request", router):
+        with patch("ablesci.papers.oa_fetch._request", router):
             result = oa_fetch.fetch_open_access(DOI, Path(self.temp.name) / "d.pdf", cache_root=self.temp.name, browser=lambda *a, **k: 0 / 0)
         self.assertEqual("downloaded", result["status"])
         self.assertEqual("acceptedVersion", result["version"])
@@ -551,7 +551,7 @@ class CoreTests(FastClock):
 
     def find(self, routes, key=""):
         router = Router(dict({"api.openalex.org": j(self.OPENALEX)}, **routes))
-        with patch("oa_fetch._request", router):
+        with patch("ablesci.papers.oa_fetch._request", router):
             return oa_fetch.find_oa_locations(DOI, core_api_key=key), router
 
     def test_no_key_means_no_core_request(self):
@@ -583,7 +583,7 @@ class CoreTests(FastClock):
             def open(self, request, timeout=0):
                 sent.append((request.full_url, request.get_header("Authorization")))
                 raise OAError("stop")
-        with patch("oa_fetch.build_opener", lambda *h: Opener()):
+        with patch("ablesci.papers.oa_fetch.build_opener", lambda *h: Opener()):
             oa_fetch.find_oa_locations(DOI, core_api_key="SECRET")
         for url, auth in sent:
             self.assertEqual("Bearer SECRET" if "core.ac.uk" in url else None, auth)

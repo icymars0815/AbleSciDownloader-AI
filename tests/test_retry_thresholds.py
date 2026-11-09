@@ -8,17 +8,17 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 from urllib.request import Request, urlopen
 
-import agent_download
-import browser_agent
-import download_policy as dp
-from app import make_server
-from browser_agent import BASE, RetryScheduled, SessionExpired
-from core import Store
-from download_policy import RULES_VERSION, validate_download_settings, download_settings
-from monitor import Monitor
-from notifications import Notifier
-from pipeline import next_step, retry_waiting
-from task_states import workflow_state
+from ablesci.website import agent_download
+from ablesci.website import browser_agent
+from ablesci.website import download_policy as dp
+from ablesci.server.app import make_server
+from ablesci.website.browser_agent import BASE, RetryScheduled, SessionExpired
+from ablesci.flow.core import Store
+from ablesci.website.download_policy import RULES_VERSION, validate_download_settings, download_settings
+from ablesci.flow.monitor import Monitor
+from ablesci.flow.notifications import Notifier
+from ablesci.flow.pipeline import next_step, retry_waiting
+from ablesci.flow.task_states import workflow_state
 from tests import helpers as hp
 from tests.helpers import fulfilled, NOW
 
@@ -343,7 +343,8 @@ if __name__ == "__main__":
 
 class FulfilledAtStampTests(unittest.TestCase):
     def test_sync_stamps_answer_time_once_and_clears_after_rejection(self):
-        import inspect, browser_agent
+        import inspect
+        from ablesci.website import browser_agent
         src = inspect.getsource(browser_agent.BrowserAgent.sync)
         self.assertIn('if state in FULFILLED and not current.get("fulfilled_at")', src)
         self.assertIn('elif state in WAITING and current.get("fulfilled_at")', src)
@@ -351,7 +352,7 @@ class FulfilledAtStampTests(unittest.TestCase):
 
 class ClosedBrowserTests(unittest.TestCase):
     def test_target_closed_is_transient_and_close_is_idempotent(self):
-        import browser_agent
+        from ablesci.website import browser_agent
         TargetClosedError = type("TargetClosedError", (Exception,), {})
         self.assertTrue(browser_agent.is_transient(TargetClosedError("Target page, context or browser has been closed")))
         agent = browser_agent.BrowserAgent.__new__(browser_agent.BrowserAgent)

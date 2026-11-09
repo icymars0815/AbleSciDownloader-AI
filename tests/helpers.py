@@ -12,13 +12,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
-import intake
-from accounts import Accounts
-from app import make_server
-from browser_agent import BASE, BrowserAgent
-from core import Store, now
-from download_policy import RULES_VERSION, highspeed_allowed  # noqa: F401  (RULES_VERSION is re-exported)
-from pipeline import FULFILLED, PIPELINE_RULES_VERSION, WAITING, stage_of
+from ablesci.flow import intake
+from ablesci.website.accounts import Accounts
+from ablesci.server.app import make_server
+from ablesci.website.browser_agent import BASE, BrowserAgent
+from ablesci.flow.core import Store, now
+from ablesci.website.download_policy import RULES_VERSION, highspeed_allowed  # noqa: F401  (RULES_VERSION is re-exported)
+from ablesci.flow.pipeline import FULFILLED, PIPELINE_RULES_VERSION, WAITING, stage_of
 
 
 NOW = datetime(2026, 10, 19, 12, 0, tzinfo=timezone.utc)
@@ -172,7 +172,7 @@ class DownloadHarness:
         return page
 
     def run_download(self):
-        with patch("agent_download.highspeed_allowed", wraps=highspeed_allowed) as spy:
+        with patch("ablesci.website.agent_download.highspeed_allowed", wraps=highspeed_allowed) as spy:
             try:
                 self.agent.download(self.item)
                 error = None

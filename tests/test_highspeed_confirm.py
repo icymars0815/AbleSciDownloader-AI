@@ -2,8 +2,8 @@ import threading
 import unittest
 from unittest import mock
 
-import browser_agent
-from browser_agent import BrowserAgent, PreconditionError
+from ablesci.website import browser_agent
+from ablesci.website.browser_agent import BrowserAgent, PreconditionError
 
 RULE = "高速通道提示 高速通道积分规则 用户积分＜500：单个文件高速下载扣 2 积分，同一文件后续高速下载不重复扣分。 用户积分≥500：免积分 确认使用高速通道 取消"
 

@@ -12,18 +12,18 @@ from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-import applog
-import core
-import intake
-import oa_fetch
-import publish_policy as pp
-from accounts import Accounts
-from ai_service import AIService
-from app import make_server
-from browser_agent import BrowserAgent, PreconditionError, TransientError, is_transient, OPEN_TIMEOUT_TEXT
-from core import Store
-from monitor import Monitor
-from pipeline import Pipeline, stage_of
+from ablesci.system import applog
+from ablesci.flow import core
+from ablesci.flow import intake
+from ablesci.papers import oa_fetch
+from ablesci.website import publish_policy as pp
+from ablesci.website.accounts import Accounts
+from ablesci.papers.ai_service import AIService
+from ablesci.server.app import make_server
+from ablesci.website.browser_agent import BrowserAgent, PreconditionError, TransientError, is_transient, OPEN_TIMEOUT_TEXT
+from ablesci.flow.core import Store
+from ablesci.flow.monitor import Monitor
+from ablesci.flow.pipeline import Pipeline, stage_of
 from tests import helpers as hp
 from tests.helpers import PublishBase, lookup_text, TITLE as PUB_TITLE, DOI as PUB_DOI
 
@@ -361,7 +361,7 @@ class M13UploadTests(ApiCase):
         folder.mkdir()
         (folder / (item_id + ".pdf")).write_bytes(b"%PDF-old leftover")
         data = base64.b64encode(PDF_BYTES).decode()
-        with patch("api_intake.verify_with_metadata", return_value=dict(status="review", reason="r", sha256="x")):
+        with patch("ablesci.server.api_intake.verify_with_metadata", return_value=dict(status="review", reason="r", sha256="x")):
             self.post("upload", {"id": item_id, "base64": data})
         self.assertEqual(PDF_BYTES, (folder / (item_id + ".pdf")).read_bytes())
         self.assertTrue(self.store.get(item_id)["pdf"].endswith(item_id + ".pdf"))
@@ -594,7 +594,7 @@ class M15OaFetchTests(unittest.TestCase):
             self.assertFalse(oa_fetch.is_private_url(url), url)
 
     def test_request_refuses_private_addresses_without_connecting(self):
-        with patch("oa_fetch.build_opener") as opener:
+        with patch("ablesci.papers.oa_fetch.build_opener") as opener:
             with self.assertRaises(oa_fetch.OAError):
                 oa_fetch._request("http://127.0.0.1:8769/api/state")
             opener.assert_not_called()
@@ -621,7 +621,7 @@ class M15OaFetchTests(unittest.TestCase):
         class Opener:
             def open(self, request, timeout=None):
                 return Slow()
-        with patch("oa_fetch.build_opener", lambda *h: Opener()), patch.object(oa_fetch, "TOTAL_DEADLINE", 0.1):
+        with patch("ablesci.papers.oa_fetch.build_opener", lambda *h: Opener()), patch.object(oa_fetch, "TOTAL_DEADLINE", 0.1):
             with self.assertRaises(oa_fetch.OAError) as caught:
                 oa_fetch._request("https://slow.example.org/x.pdf")
         self.assertIn("deadline", str(caught.exception))

@@ -7,9 +7,9 @@ from unittest.mock import MagicMock
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from app import make_server
-from core import Store
-from download_policy import (DOWNLOAD_DEFAULTS, DOWNLOAD_RANGES, RULES_VERSION, download_settings, highspeed_allowed, make_watch, migrate_preferences, resolve_highspeed, validate_download_settings)
+from ablesci.server.app import make_server
+from ablesci.flow.core import Store
+from ablesci.website.download_policy import (DOWNLOAD_DEFAULTS, DOWNLOAD_RANGES, RULES_VERSION, download_settings, highspeed_allowed, make_watch, migrate_preferences, resolve_highspeed, validate_download_settings)
 
 CONSENT = dict(rules_version=RULES_VERSION)
 from tests.helpers import DownloadHarness, RULES
@@ -429,6 +429,6 @@ class LineContextTests(unittest.TestCase):
     def test_switch_context_cleared_before_patient_and_highspeed(self):
         # Real 2026-10-20: the free-line 'switch' rule leaked into patient waiting and high speed and cut both off.
         import re
-        source = open(__import__("agent_download").__file__, encoding="utf-8").read()
+        source = open(__import__("ablesci.website.agent_download", fromlist=["x"]).__file__, encoding="utf-8").read()
         self.assertRegex(source, r"self\._line_ctx = None\s+# patient mode")
         self.assertRegex(source, r"self\._line_ctx = None\s+# the free-line switch rule never applies to high speed\s+speed_button\.click\(\)")

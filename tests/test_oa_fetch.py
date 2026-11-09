@@ -7,11 +7,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-import oa_fetch
-from accounts import Accounts
-from core import Store
-from oa_fetch import OAChallenge, OAError
-from pipeline import Pipeline, next_step, stage_of
+from ablesci.papers import oa_fetch
+from ablesci.website.accounts import Accounts
+from ablesci.flow.core import Store
+from ablesci.papers.oa_fetch import OAChallenge, OAError
+from ablesci.flow.pipeline import Pipeline, next_step, stage_of
 
 PDF = b"%PDF-1.7\n" + b"x" * 100
 NOW = datetime(2026, 10, 19, 12, 0, tzinfo=timezone.utc)
@@ -47,7 +47,7 @@ OPENALEX = {"open_access": {"is_oa": True, "oa_status": "gold"}, "ids": {},
 class FindTests(unittest.TestCase):
     def find(self, routes, email=""):
         router = Router(routes)
-        with patch("oa_fetch._request", router):
+        with patch("ablesci.papers.oa_fetch._request", router):
             return oa_fetch.find_oa_locations(DOI, email), router
 
     def test_ordering_and_dedupe(self):
@@ -103,12 +103,12 @@ class FindTests(unittest.TestCase):
             self.assertFalse(any(c["source"] == "PMC Cloud" for c in result["candidates"]))
 
     def test_preprints(self):
-        with patch("oa_fetch._request", Router({})):
+        with patch("ablesci.papers.oa_fetch._request", Router({})):
             arxiv = oa_fetch.find_oa_locations("10.48550/arXiv.1706.03762")
         self.assertEqual("https://arxiv.org/pdf/1706.03762", arxiv["candidates"][0]["url"])
         bio = j({"collection": [{"version": "1"}, {"version": "3"}]})
         router = Router({"api.biorxiv.org/details/biorxiv/": bio})
-        with patch("oa_fetch._request", router):
+        with patch("ablesci.papers.oa_fetch._request", router):
             result = oa_fetch.find_oa_locations("10.1101/2020.01.01.000001")
         self.assertEqual("https://www.biorxiv.org/content/10.1101/2020.01.01.000001v3.full.pdf", result["candidates"][0]["url"])
         self.assertFalse(any("medrxiv" in u for u in router.calls))
@@ -141,7 +141,7 @@ class DownloadTests(unittest.TestCase):
         router = Router({"html": (200, b"<html>login</html>"), "forbidden": OAError("HTTP 403", 403), "big": OAError("file too large", 200),
                          "good": (200, PDF)})
         urls = ["https://a.example/html", "https://b.example/forbidden", "https://c.example/big", "https://d.example/good", "https://e.example/never"]
-        with patch("oa_fetch._request", router):
+        with patch("ablesci.papers.oa_fetch._request", router):
             result = oa_fetch.download_oa(urls, self.dest)
         self.assertTrue(result["ok"])
         self.assertEqual(PDF, self.dest.read_bytes())
@@ -152,7 +152,7 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual("d.example", result["attempts"][3]["host"])
 
     def test_all_fail_writes_nothing(self):
-        with patch("oa_fetch._request", Router({"": (200, b"<html></html>")})):
+        with patch("ablesci.papers.oa_fetch._request", Router({"": (200, b"<html></html>")})):
             result = oa_fetch.download_oa(["https://a.example/1"], self.dest)
         self.assertFalse(result["ok"])
         self.assertFalse(self.dest.exists())
@@ -160,7 +160,7 @@ class DownloadTests(unittest.TestCase):
     def test_never_overwrites(self):
         self.dest.write_bytes(b"%PDF-mine")
         router = Router({"": (200, PDF)})
-        with patch("oa_fetch._request", router):
+        with patch("ablesci.papers.oa_fetch._request", router):
             result = oa_fetch.download_oa(["https://a.example/1"], self.dest)
         self.assertFalse(result["ok"])
         self.assertEqual([], router.calls)
@@ -170,18 +170,18 @@ class DownloadTests(unittest.TestCase):
         def racing(url, *a, **k):
             self.dest.write_bytes(b"%PDF-other")
             return 200, PDF
-        with patch("oa_fetch._request", racing):
+        with patch("ablesci.papers.oa_fetch._request", racing):
             result = oa_fetch.download_oa(["https://a.example/1"], self.dest)
         self.assertFalse(result["ok"])
         self.assertEqual(b"%PDF-other", self.dest.read_bytes())
 
     def test_challenge_is_detected_not_solved(self):
         router = Router({"cf": OAError("HTTP 403", 403, True)})
-        with patch("oa_fetch._request", router):
+        with patch("ablesci.papers.oa_fetch._request", router):
             result = oa_fetch.download_oa(["https://pub.example/cf"], self.dest)
         self.assertEqual("https://pub.example/cf", result["challenge_url"])
         page = (200, b"<html><title>Just a moment...</title></html>")
-        with patch("oa_fetch._request", Router({"": page})):
+        with patch("ablesci.papers.oa_fetch._request", Router({"": page})):
             self.assertTrue(oa_fetch.download_oa(["https://pub.example/x"], self.dest)["challenge_url"])
         self.assertTrue(oa_fetch.challenge_in("<div class='cf-turnstile'>"))
         self.assertFalse(oa_fetch.challenge_in("<p>Please enter a captcha</p>", 200))
@@ -213,17 +213,17 @@ class TransportTests(unittest.TestCase):
             def open(self, request, timeout=None):
                 seen.append((request, timeout))
                 return self.response
-        with patch("oa_fetch.build_opener", lambda *h: Opener(self.Response())):
+        with patch("ablesci.papers.oa_fetch.build_opener", lambda *h: Opener(self.Response())):
             oa_fetch._request("https://a.example/x.pdf")
         request, timeout = seen[0]
         self.assertEqual("KYTDL/1.0 (local literature helper)", request.get_header("User-agent"))
         self.assertIsNone(request.get_header("Cookie"))
         self.assertIsNone(request.get_header("Authorization"))
         self.assertEqual(45, timeout)
-        with patch("oa_fetch.build_opener", lambda *h: Opener(self.Response(length=str(61 * 1024 * 1024)))):
+        with patch("ablesci.papers.oa_fetch.build_opener", lambda *h: Opener(self.Response(length=str(61 * 1024 * 1024)))):
             with self.assertRaises(OAError):
                 oa_fetch._request("https://a.example/x.pdf")
-        with patch("oa_fetch.build_opener", lambda *h: Opener(self.Response(length="", body=b"x" * 50))):
+        with patch("ablesci.papers.oa_fetch.build_opener", lambda *h: Opener(self.Response(length="", body=b"x" * 50))):
             with self.assertRaises(OAError):
                 oa_fetch._request("https://a.example/x.pdf", max_bytes=10)
         with self.assertRaises(OAError):
@@ -258,7 +258,7 @@ class FetchTests(unittest.TestCase):
 
     def fetch(self, routes, mode="prompt", browser="ok"):
         routes = dict({"api.openalex.org": j(OPENALEX)}, **routes)
-        with patch("oa_fetch._request", Router(routes)):
+        with patch("ablesci.papers.oa_fetch._request", Router(routes)):
             return oa_fetch.fetch_open_access(DOI, self.dest, challenge_mode=mode, browser=self.fake_browser(browser))
 
     def test_direct_success(self):
@@ -308,7 +308,7 @@ class FetchTests(unittest.TestCase):
         self.assertEqual([], self.browser_calls)
 
     def test_all_lookups_down_is_failed_not_not_oa(self):
-        with patch("oa_fetch._request", Router({"": OAError("URLError")})):
+        with patch("ablesci.papers.oa_fetch._request", Router({"": OAError("URLError")})):
             result = oa_fetch.fetch_open_access(DOI, self.dest, browser=self.fake_browser())
         self.assertEqual("failed", result["status"])
 
@@ -406,7 +406,7 @@ class PipelineOATests(unittest.TestCase):
         return run
 
     def verification(self, status):
-        return patch("pipeline.verify_with_metadata", lambda *a, **k: dict(status=status, reason="mock", sha256="x"))
+        return patch("ablesci.flow.pipeline.verify_with_metadata", lambda *a, **k: dict(status=status, reason="mock", sha256="x"))
 
     def test_worker_exception_records_failed_oa_result_without_infinite_rescreen(self):
         with patch.object(self.pipeline, "oa_run", side_effect=RuntimeError("unexpected")), \
@@ -415,7 +415,7 @@ class PipelineOATests(unittest.TestCase):
         self.assertEqual("failed", self.store.get(self.item)["oa_check"]["status"])
 
     def test_success_identity_match_is_done(self):
-        with patch("oa_fetch.fetch_open_access", self.result()), self.verification("identity_match"):
+        with patch("ablesci.papers.oa_fetch.fetch_open_access", self.result()), self.verification("identity_match"):
             self.pipeline.oa_run(self.item)
         item = self.store.get(self.item)
         self.assertEqual("done", stage_of(item))
@@ -430,7 +430,7 @@ class PipelineOATests(unittest.TestCase):
         self.assertEqual("profile", Path(self.kwargs["profile_dir"]).name.split("-")[-1])
 
     def test_success_without_match_goes_to_oa_review(self):
-        with patch("oa_fetch.fetch_open_access", self.result()), self.verification("title_mismatch"):
+        with patch("ablesci.papers.oa_fetch.fetch_open_access", self.result()), self.verification("title_mismatch"):
             self.pipeline.oa_run(self.item)
         item = self.store.get(self.item)
         self.assertEqual("oa_review", stage_of(item))
@@ -440,7 +440,7 @@ class PipelineOATests(unittest.TestCase):
     def test_failure_and_not_oa_continue_to_publish_path(self):
         for status in ("failed", "not_oa"):
             store_item = self.store.add("Other " + status, "10.1234/" + status, account_id="default", request_confirmed=True)
-            with patch("oa_fetch.fetch_open_access", self.result(status)):
+            with patch("ablesci.papers.oa_fetch.fetch_open_access", self.result(status)):
                 self.pipeline.oa_run(store_item)
             item = self.store.get(store_item)
             self.assertEqual(status, item["oa_check"]["status"])
@@ -452,19 +452,19 @@ class PipelineOATests(unittest.TestCase):
     def test_exception_is_recorded_as_failed(self):
         def boom(*a, **k):
             raise RuntimeError("network")
-        with patch("oa_fetch.fetch_open_access", boom):
+        with patch("ablesci.papers.oa_fetch.fetch_open_access", boom):
             self.pipeline.oa_run(self.item)
         self.assertEqual("failed", self.store.get(self.item)["oa_check"]["status"])
 
     def test_preferences_are_passed_and_email_not_logged(self):
         self.store.update_preferences(oa_contact_email="me@example.org", oa_challenge_mode="skip")
-        with patch("oa_fetch.fetch_open_access", self.result("failed")):
+        with patch("ablesci.papers.oa_fetch.fetch_open_access", self.result("failed")):
             self.pipeline.oa_run(self.item)
         self.assertEqual(("me@example.org", "skip"), (self.kwargs["email"], self.kwargs["challenge_mode"]))
         self.assertNotIn("me@example.org", json.dumps(self.store.snapshot()["events"]))
 
     def test_needs_human_flow_and_skip(self):
-        with patch("oa_fetch.fetch_open_access", self.result("needs_human", manual_url="https://p.example/x")), patch("oa_fetch.browser_download") as launched:
+        with patch("ablesci.papers.oa_fetch.fetch_open_access", self.result("needs_human", manual_url="https://p.example/x")), patch("ablesci.papers.oa_fetch.browser_download") as launched:
             self.pipeline.oa_run(self.item)
             launched.assert_not_called()
         check = self.store.get(self.item)["oa_check"]
@@ -484,13 +484,13 @@ class PipelineOATests(unittest.TestCase):
             self.assertEqual("https://p.example/x", url)
             self.assertEqual("oa-browser-profile", Path(profile).name)
             return dict(status="needs_human", attempts=[], source="Chromium (visible)")
-        with patch("oa_fetch.human_fetch", human):
+        with patch("ablesci.papers.oa_fetch.human_fetch", human):
             self.pipeline.oa_run(self.item, human=True)
         self.assertEqual("needs_human", self.store.get(self.item)["oa_check"]["status"])
         def human_ok(url, dest, profile):
             Path(dest).write_bytes(PDF)
             return dict(status="downloaded", attempts=[], source="Chromium (visible)")
-        with patch("oa_fetch.human_fetch", human_ok), self.verification("identity_match"):
+        with patch("ablesci.papers.oa_fetch.human_fetch", human_ok), self.verification("identity_match"):
             self.pipeline.oa_run(self.item, human=True)
         self.assertEqual("done", stage_of(self.store.get(self.item)))
 
@@ -502,7 +502,7 @@ class PipelineOATests(unittest.TestCase):
             release.wait(5)
             return dict(status="failed", attempts=[])
         main = threading.current_thread()
-        with patch("oa_fetch.fetch_open_access", slow):
+        with patch("ablesci.papers.oa_fetch.fetch_open_access", slow):
             planned = self.pipeline.plan(NOW)[3]
             self.assertEqual("oa_fetch", planned["action"])
             self.assertTrue(self.pipeline.execute(planned))
@@ -523,7 +523,7 @@ class PipelineOATests(unittest.TestCase):
         import threading
         self.store.update_preferences(pipeline_enabled=True)
         self.agent.busy = True
-        with patch("oa_fetch.fetch_open_access", self.result("failed")):
+        with patch("ablesci.papers.oa_fetch.fetch_open_access", self.result("failed")):
             planned = self.pipeline.tick(NOW)
             self.assertEqual("oa_fetch", planned["action"])
             self.pipeline.oa_thread.join(5)
@@ -545,7 +545,7 @@ class ApiTests(unittest.TestCase):
     def setUp(self):
         import threading
         from urllib.request import urlopen
-        from app import make_server
+        from ablesci.server.app import make_server
         self.temp = tempfile.TemporaryDirectory()
         self.server = make_server(0, self.temp.name, auto_screen=False)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -627,7 +627,7 @@ class NoLoginTests(unittest.TestCase):
         self.item = self.store.add("Free paper", DOI, account_id="default", request_confirmed=True)
 
     def test_planner_without_session(self):
-        from pipeline import NO_SESSION_NOTE, has_session
+        from ablesci.flow.pipeline import NO_SESSION_NOTE, has_session
         items = [imp()]
         self.assertFalse(has_session({}, items))
         self.assertEqual("oa_fetch", next_step(items, {}, {}, NOW, session=False)["action"])
@@ -644,7 +644,7 @@ class NoLoginTests(unittest.TestCase):
             Path(dest).write_bytes(PDF)
             return dict(status="downloaded", oa_status="gold", attempts=[], links=[dict(url="https://p.example/a.pdf", source="OpenAlex")],
                         landing_url="https://p.example/a")
-        with patch("oa_fetch.fetch_open_access", run), patch("pipeline.verify_with_metadata", lambda *a, **k: dict(status="identity_match")):
+        with patch("ablesci.papers.oa_fetch.fetch_open_access", run), patch("ablesci.flow.pipeline.verify_with_metadata", lambda *a, **k: dict(status="identity_match")):
             self.store.update_preferences(pipeline_enabled=True)
             self.assertEqual("oa_fetch", self.pipeline.tick(NOW)["action"])
             self.pipeline.oa_thread.join(5)
@@ -652,7 +652,7 @@ class NoLoginTests(unittest.TestCase):
         self.assertEqual([], self.agent.calls)
 
     def test_not_oa_stays_queued_with_note_and_no_attention(self):
-        with patch("oa_fetch.fetch_open_access", lambda *a, **k: dict(status="not_oa", attempts=[])):
+        with patch("ablesci.papers.oa_fetch.fetch_open_access", lambda *a, **k: dict(status="not_oa", attempts=[])):
             self.pipeline.oa_run(self.item)
         item = self.store.get(self.item)
         self.assertEqual(("queued", "无免费全文。登录科研通后可求助"), (stage_of(item), item["note"]))
@@ -666,7 +666,7 @@ class NoLoginTests(unittest.TestCase):
         found = dict(status="found", oa_status="green", attempts=[], links=[dict(url="https://a.example/1.pdf", source="Europe PMC"),
                                                                            dict(url="https://b.example/2.pdf", source="OpenAlex")],
                      landing_url="https://a.example/landing")
-        with patch("oa_fetch.lookup_only", lambda doi, email="", **kw: found), patch("oa_fetch.fetch_open_access") as full:
+        with patch("ablesci.papers.oa_fetch.lookup_only", lambda doi, email="", **kw: found), patch("ablesci.papers.oa_fetch.fetch_open_access") as full:
             self.pipeline.oa_run(self.item, lookup_only=True)
             full.assert_not_called()
         check = self.store.get(self.item)["oa_check"]
@@ -677,7 +677,7 @@ class NoLoginTests(unittest.TestCase):
             seen.update(kwargs)
             Path(dest).write_bytes(PDF)
             return dict(status="downloaded", attempts=[], source="OpenAlex")
-        with patch("oa_fetch.fetch_open_access", run), patch("pipeline.verify_with_metadata", lambda *a, **k: dict(status="identity_match")):
+        with patch("ablesci.papers.oa_fetch.fetch_open_access", run), patch("ablesci.flow.pipeline.verify_with_metadata", lambda *a, **k: dict(status="identity_match")):
             self.pipeline.oa_run(self.item, only_url="https://b.example/2.pdf")
         self.assertEqual([dict(url="https://b.example/2.pdf", source="OpenAlex")], seen["candidates"])
         self.assertEqual("done", stage_of(self.store.get(self.item)))
@@ -685,7 +685,7 @@ class NoLoginTests(unittest.TestCase):
 
     def test_unknown_link_is_rejected(self):
         self.store.update(self.item, oa_check=dict(status="found", links=[dict(url="https://a.example/1.pdf", source="x")]))
-        with patch("oa_fetch.fetch_open_access") as full:
+        with patch("ablesci.papers.oa_fetch.fetch_open_access") as full:
             self.pipeline.oa_run(self.item, only_url="https://evil.example/x.pdf")
             full.assert_not_called()
         self.assertEqual("failed", self.store.get(self.item)["oa_check"]["status"])
@@ -693,17 +693,17 @@ class NoLoginTests(unittest.TestCase):
     def test_fetch_open_access_with_chosen_candidates_skips_lookup(self):
         router = Router({"chosen": (200, PDF)})
         dest = Path(self.temp.name) / "c.pdf"
-        with patch("oa_fetch._request", router):
+        with patch("ablesci.papers.oa_fetch._request", router):
             result = oa_fetch.fetch_open_access(DOI, dest, candidates=[dict(url="https://x.example/chosen.pdf", source="Europe PMC")])
         self.assertEqual("downloaded", result["status"])
         self.assertEqual(["https://x.example/chosen.pdf"], router.calls)           # no OpenAlex lookup
 
     def test_lookup_only_function(self):
-        with patch("oa_fetch._request", Router({"api.openalex.org": j(OPENALEX)})):
+        with patch("ablesci.papers.oa_fetch._request", Router({"api.openalex.org": j(OPENALEX)})):
             result = oa_fetch.lookup_only(DOI)
         self.assertEqual("found", result["status"])
         self.assertEqual("https://pub.example/landing", result["landing_url"])
         self.assertEqual("https://pub.example/best.pdf", result["links"][0]["url"])
         closed = j({"open_access": {"is_oa": False}, "locations": [], "ids": {}})
-        with patch("oa_fetch._request", Router({"api.openalex.org": closed})):
+        with patch("ablesci.papers.oa_fetch._request", Router({"api.openalex.org": closed})):
             self.assertEqual("not_oa", oa_fetch.lookup_only(DOI)["status"])

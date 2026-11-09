@@ -8,10 +8,10 @@ import unittest
 from pathlib import Path
 from urllib.request import urlopen
 
-import kytdl
-import runtime_paths
-from app import make_server
-from kytdl_client import Client, ServiceDown
+from ablesci.cli import kytdl
+from ablesci.system import runtime_paths
+from ablesci.server.app import make_server
+from ablesci.cli.kytdl_client import Client, ServiceDown
 
 
 class TokenFileTests(unittest.TestCase):
@@ -112,9 +112,10 @@ class CommandTests(unittest.TestCase):
         self.assertEqual("kytdl login", rows[1]["next"])
 
     def test_removed_parts_are_gone(self):
-        root = Path(kytdl.__file__).resolve().parent
+        root = Path(kytdl.__file__).resolve().parents[2]
         for name in ("mcp_server.py", "tray.py", "launcher.py", "app.js", "index.html"):
             self.assertFalse((root / name).exists(), name)
+        self.assertEqual([], sorted(p.name for p in root.glob("*.py")))   # code lives in ablesci/, not the root
         requirements = (root / "requirements.txt").read_text(encoding="utf-8").lower()
         for package in ("mcp", "pystray", "pillow"):
             self.assertNotIn(package + ">", requirements)

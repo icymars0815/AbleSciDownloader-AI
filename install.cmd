@@ -31,5 +31,5 @@ if errorlevel 1 (
 )
 
 echo [install] Checking ...
-".venv\Scripts\python.exe" kytdl.py doctor
+".venv\Scripts\python.exe" -m ablesci doctor
 exit /b %ERRORLEVEL%

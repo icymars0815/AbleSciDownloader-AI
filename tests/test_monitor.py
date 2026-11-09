@@ -8,18 +8,18 @@ from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-import autostart as autostart_module
-import notifications
-import oa_fetch
-from app import make_server
-from autostart import Autostart
-from browser_agent import SessionExpired
-from core import Store
-from instance_lock import AlreadyRunning, InstanceLock
-from monitor import Monitor, choose_interval, validate_monitor
-from notifications import Notifier
-from pipeline import FULFILLED, Pipeline, WAITING
-from ratelimit import PublishLimiter, RateLimiter, limit_settings, validate_limits
+from ablesci.system import autostart as autostart_module
+from ablesci.flow import notifications
+from ablesci.papers import oa_fetch
+from ablesci.server.app import make_server
+from ablesci.system.autostart import Autostart
+from ablesci.website.browser_agent import SessionExpired
+from ablesci.flow.core import Store
+from ablesci.system.instance_lock import AlreadyRunning, InstanceLock
+from ablesci.flow.monitor import Monitor, choose_interval, validate_monitor
+from ablesci.flow.notifications import Notifier
+from ablesci.flow.pipeline import FULFILLED, Pipeline, WAITING
+from ablesci.flow.ratelimit import PublishLimiter, RateLimiter, limit_settings, validate_limits
 from tests.helpers import Clock, FakeAccounts, MonitorAgent as FakeAgent, T
 
 
@@ -495,7 +495,7 @@ class LockAndAutostartTests(unittest.TestCase):
 
     def test_real_pid_probe(self):
         import os
-        from instance_lock import pid_alive
+        from ablesci.system.instance_lock import pid_alive
         self.assertTrue(pid_alive(os.getpid()))
         self.assertFalse(pid_alive(0))
 
@@ -515,7 +515,7 @@ class LockAndAutostartTests(unittest.TestCase):
                                   capture_output=True, text=True, timeout=60)
             target, arguments = done.stdout.strip().splitlines()[-2:]
             self.assertTrue(target.endswith("pythonw.exe"))
-            self.assertEqual("kytdl.py start", arguments)
+            self.assertEqual("-m ablesci start", arguments)
             auto.disable()
             self.assertFalse(auto.enabled())
             self.assertEqual([], list(startup.iterdir()))
@@ -526,7 +526,7 @@ class LockAndAutostartTests(unittest.TestCase):
             with patch.object(Autostart, "_shortcut", side_effect=ImportError("no com")):
                 self.assertEqual("cmd", auto.enable())
             self.assertTrue(auto.enabled())
-            self.assertIn(b"kytdl.py start", (Path(tmp) / "S" / autostart_module.CMD_NAME).read_bytes())
+            self.assertIn(b"-m ablesci start", (Path(tmp) / "S" / autostart_module.CMD_NAME).read_bytes())
             auto.disable()
             self.assertFalse(auto.enabled())
 

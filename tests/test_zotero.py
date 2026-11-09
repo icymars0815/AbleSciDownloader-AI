@@ -9,8 +9,8 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 from urllib.request import urlopen
 
-import intake
-import zotero_bridge
+from ablesci.flow import intake
+from ablesci.papers import zotero_bridge
 from tests import helpers as hp
 
 DOI = "10.1234/zot.1"
