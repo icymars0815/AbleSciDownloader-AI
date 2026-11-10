@@ -15,7 +15,7 @@ from ablesci.papers import oa_fetch
 from ablesci.flow import settings as app_settings
 from ablesci.papers import zotero_bridge
 from ablesci.flow.core import doi_value, now
-from ablesci.flow.pipeline import stage_of, acquisition_state, gate, next_step, PIPELINE_RULES_VERSION
+from ablesci.flow.pipeline import stage_of, acquisition_state, gate, next_step, ai_review_task, PIPELINE_RULES_VERSION
 
 TOKEN_TTL = 300
 RENDER_MAX_PAGE = 3
@@ -185,7 +185,11 @@ class McpApi:
             stage = stage_of(i)
             note = redact(i.get("note") or i.get("website_status") or "", self.store.root)
             row = None
-            if stage == "awaiting_decision":
+            task = ai_review_task(i) if app_settings.ai_takeover(prefs, active) else None
+            if task:
+                row = dict(kind="pending_ai_review", reason=task["hint"], next=task["next"], since=task["since"],
+                           minutes=task["minutes"], escalate=task["escalate"], preprint_doi=task["preprint_doi"] or None)
+            elif stage == "awaiting_decision":
                 v = (i.get("verification") or {}).get("status")
                 row = dict(kind="decide_answer", reason="已下载应助文件，核对结果：%s" % v,
                            next="get_result(id) and show the user; then adopt_paper(id, confirmed=true) or reject_paper(...)")

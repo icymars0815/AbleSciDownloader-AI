@@ -210,7 +210,11 @@ def public_batch(batch, items, prefs, points):
     published = sum(1 for s in stages if s in ("submitted", "fulfilled", "downloading", "awaiting_decision", "done"))
     got = sum(1 for s in stages if s in ("fulfilled", "downloading", "awaiting_decision", "done"))
     finished = sum(1 for s in stages if s == "done") + sum(1 for r in rows if r["code"] == "oa_done")
-    errors = sum(1 for s in stages if s == "attention")
+    # a submit click still being confirmed is progress, and a scheduled retry is not an error (real 2026-11-10: "0/3 error")
+    in_flight = [i for i in mine if stage_of(i) == "attention" and (i.get("publish_action") or {}).get("status") == "attempted"
+                 and (i.get("publish_check") or {}).get("kind") == "submitting"]
+    errors = sum(1 for i in mine if stage_of(i) == "attention" and i not in in_flight)
+    retrying = sum(1 for i in mine if stage_of(i) == "queued" and i.get("publish_retry"))
     spent = _seconds(batch["created"], batch.get("screening_done_at"))
     steps = [dict(key="import", label="导入 %d 条" % total, status="done", detail="")]
     steps.append(dict(key="screen", label="免费全文筛选 %d/%d" % (screened, with_doi), status="done" if done_screen else "active",
@@ -228,16 +232,21 @@ def public_batch(batch, items, prefs, points):
              "免费全文待核对 %d 条" % review_count if review_count and not want else "待确认（%d 条需求助）" % want)
     steps.append(dict(key="confirm", label=label, status=conf, detail=""))
     confirmed = conf == "done"
-    req = "error" if errors else "pending" if not confirmed else "done" if phase in ("monitoring", "done") else "active"
+    req = ("error" if errors else "retrying" if retrying else "pending" if not confirmed else
+           "done" if mine and published == len(mine) else "active")
     steps.append(dict(key="request", label="科研通求助 %d/%d" % (published, len(mine)), status=req, detail=""))
-    steps.append(dict(key="wait", label="等待应助", status="pending" if not confirmed else "active" if "submitted" in stages else "done" if published else "pending", detail=""))
+    answered = sum(1 for s in stages if s in ("fulfilled", "downloading", "awaiting_decision", "done"))
+    steps.append(dict(key="wait", label="等待应助 %d/%d" % (answered, published), status="pending" if not confirmed or not published else
+                      "active" if "submitted" in stages else "done" if answered == len(mine) else "active", detail=""))
     steps.append(dict(key="download", label="下载与核对 %d/%d" % (got, len(mine)),
                       status="pending" if not confirmed else "done" if mine and got == len(mine) else "active" if got else "pending", detail=""))
     steps.append(dict(key="done", label="完成 %d/%d" % (finished, total), status="done" if phase == "done" and done_screen else "pending", detail=""))
+    current = next((st["key"] for st in steps if st["status"] in ("active", "waiting_you", "error", "retrying")), None)
+    current = current or ("done" if phase == "done" else next((st["key"] for st in steps if st["status"] == "pending"), "done"))
     return dict(id=batch["id"], created=batch["created"], phase=phase, prompted=bool(batch.get("prompted")), deferred=bool(batch.get("deferred_at")),
-                ai_auto=bool(batch.get("ai_auto")),
+                ai_auto=bool(batch.get("ai_auto")), current_step=current,
                 total=total, counts=dict(total=total, with_doi=with_doi, screened=screened, to_request=want, confirmed=len(mine),
-                                         published=published, got=got, finished=finished, errors=errors),
+                                         published=published, got=got, finished=finished, errors=errors, retrying=retrying),
                 steps=steps, items=rows)
 
 

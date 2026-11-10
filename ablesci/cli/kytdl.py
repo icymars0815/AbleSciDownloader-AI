@@ -4,7 +4,8 @@ Spending is only ever decided by the person: `kytdl ai on --confirmed` (AI takeo
 `kytdl confirm ... --confirmed` (one batch / one raised reward). Show the rules or the preview to the user first.
 AI workflow: `kytdl get <list>` -> report the results; `needs_points` -> ask the user -> `kytdl confirm`;
 `needs_check` -> look at the PDF pages -> `kytdl verify`; later `kytdl inbox --ack` for results that arrived meanwhile.
-Exit codes: 0 ok, 1 business error / something needs the person, 2 service not running, 3 permission denied."""
+Exit codes: 0 ok, 1 error, 2 service not running, 3 permission denied, 4 a paper needs a decision (AI review, points,
+the person) - not an error."""
 import argparse
 import base64
 import json
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from ablesci.cli.kytdl_client import ApiError, Client, ServiceDown, WAIT_MAX_SECONDS, wait_until
 
-OK, BUSINESS, DOWN, DENIED = 0, 1, 2, 3
+OK, BUSINESS, DOWN, DENIED, NEEDS = 0, 1, 2, 3, 4
 BINARY_IMPORTS = (".docx", ".doc")
 
 
@@ -79,7 +80,22 @@ def needs_user(client, st):
     for row in reply.get("setup") or []:
         if not row.get("optional") and row.get("kind") not in ("smart_mode_off", "mcp_permission", "oa_contact_email"):
             out.append(dict(kind=row.get("kind"), reason=row.get("reason"), next=row.get("next")))
+    for row in reply.get("items") or []:
+        if row.get("kind") == "pending_ai_review" and row.get("escalate"):   # waited 15+ minutes for the AI
+            out.append(dict(kind="ai_review_overdue", id=row.get("id"), reason="已等待 AI 审核 %s 分钟：%s" % (row.get("minutes"), row.get("reason")),
+                            next=row.get("next")))
     return out
+
+
+def pending_ai_review(client):
+    """Files waiting for the AI to look at them (AI takeover): the explicit backlog, oldest first."""
+    try:
+        rows = client.post("/api/mcp/needs-attention", {}).get("items") or []
+    except Exception:
+        return []
+    rows = [dict(id=r.get("id"), title=clip(r.get("title"), 80), stage=r.get("stage"), minutes=r.get("minutes"), hint=r.get("reason"),
+                 next=r.get("next")) for r in rows if r.get("kind") == "pending_ai_review"]
+    return sorted(rows, key=lambda r: -(r["minutes"] or 0))
 
 
 def cmd_email(client, args):
@@ -97,8 +113,10 @@ def cmd_status(client, args):
     m = st.get("monitor") or {}
     return dict(running=True, needs_user=needs_user(client, st), points=((st.get("account") or {}).get("points")), version=(st.get("about") or {}).get("version"), papers=len(st["items"]), busy=bool(st.get("busy") or st.get("waiting")),
                 active_account_id=st.get("active_account_id"), mcp_website_actions=bool((st.get("preferences") or {}).get("mcp_website_actions")),
-                monitor=dict(enabled=m.get("enabled"), next_sync_at=m.get("next_sync_at"), last_sync_at=m.get("last_sync_at"), login_required=m.get("login_required")),
-                batches=[dict(id=b["id"], phase=b["phase"], total=b["total"]) for b in st.get("batches", [])[:5]]), OK
+                pending_ai_review=pending_ai_review(client),
+                monitor=dict(enabled=m.get("enabled"), next_sync_at=m.get("next_sync_at"), last_sync_at=m.get("last_sync_at"), login_required=m.get("login_required"),
+                             interval_seconds=m.get("interval_seconds") or m.get("interval"), band=m.get("band"), reason=m.get("reason")),
+                batches=[dict(id=b["id"], phase=b["phase"], current_step=b.get("current_step"), total=b["total"]) for b in st.get("batches", [])[:5]]), OK
 
 
 def cmd_import(client, args):
@@ -165,6 +183,9 @@ def cmd_wait(client, args):
 
 def cmd_result(client, args):
     reply = client.post("/api/mcp/result", {"id": args.id})
+    if reply.get("stage") in ("awaiting_decision", "oa_review"):
+        # the file is here but someone (normally the AI) must decide: a decision, not an error (report 2026-11-10)
+        return dict(reply, ok=True, needs_decision=True, next="kytdl pages %s --pages 1，再按 kytdl status 的 pending_ai_review 处理" % args.id), NEEDS
     return dict(reply, ok=reply["has_pdf"]), OK if reply["has_pdf"] else BUSINESS
 
 
@@ -293,7 +314,9 @@ def cmd_start(client, args):
 def get_row(item, batch, first_decision, now, auto=0):
     """One paper's result for `kytdl get`: (status, done?). auto: the AI-takeover no-ask amount (0 = off)."""
     stage = item.get("stage") or "queued"
-    if stage == "done":
+    if stage == "done" or (item.get("adopt_action") or {}).get("status") == "confirmed":
+        # an adopted paper is finished even while a later sync briefly reads an unknown site status
+        # (report 2026-11-10: needs_person reason=published after done)
         return "done", True
     if stage == "oa_review":
         return "needs_check", True
@@ -425,7 +448,7 @@ def cmd_watch(client, args):
         out["next"] = "仍在进行，可再次运行 kytdl watch %s" % args.id
     elif need:
         out["needs"] = need
-    return out, OK if out["all_done"] else BUSINESS
+    return out, OK if out["all_done"] else NEEDS if finished else BUSINESS
 
 
 def cmd_get(client, args):
@@ -468,7 +491,7 @@ def cmd_get(client, args):
                      "免费全文文件把读到的内容告诉用户，用户同意后 kytdl resolve <id> keep --confirmed（保留）或 request --confirmed（改走科研通）")
     if any(r["status"] in ("waiting_answer", "downloading", "adopting", "screening", "publishing") for r in out):
         hints.append("仍在进行的条目会在后台继续；结果出来后用 kytdl inbox 查看并告诉用户")
-    return dict(ok=not need, batch_id=batch_id, skipped_duplicates=reply.get("skipped_duplicates", 0), papers=out, next=hints), (BUSINESS if need else OK)
+    return dict(ok=not need, batch_id=batch_id, skipped_duplicates=reply.get("skipped_duplicates", 0), papers=out, next=hints), (NEEDS if need else OK)
 
 
 def parse_rewards(values, ids):
@@ -524,9 +547,19 @@ def cmd_inbox(client, args):
     return dict(ok=True, results=rows, unread=reply["unread"]), OK
 
 
+def read_title(args):
+    """--title, or --title-file PATH / - (stdin): cmd.exe splits quoted titles with spaces or colons (report 2026-11-10)."""
+    if args.title_file:
+        text = sys.stdin.read() if args.title_file == "-" else Path(args.title_file).read_text(encoding="utf-8-sig")
+        return " ".join(text.split())
+    if args.title:
+        return args.title
+    raise ValueError("请用 --title 或 --title-file 给出你在 PDF 上读到的标题")
+
+
 def cmd_verify(client, args):
     pages = [int(p) for p in (args.pages or "1").split(",") if p.strip()]
-    reply = client.post("/api/mcp/ai-verify", {"id": args.id, "doi": args.doi, "title": args.title, "pages": pages, "confirmed": args.confirmed})
+    reply = client.post("/api/mcp/ai-verify", {"id": args.id, "doi": args.doi, "title": read_title(args), "pages": pages, "confirmed": args.confirmed})
     if reply.get("passed"):
         reply = dict(reply, next="后台会自动采纳；kytdl wait %s --until done 或稍后 kytdl inbox" % args.id)
     return dict(reply, ok=reply.get("passed", False)), OK if reply.get("passed") else BUSINESS
@@ -638,7 +671,8 @@ def parser():
     s = sub.add_parser("verify", parents=[common], help="report the DOI and title you read on the downloaded PDF (AI takeover); a pass lets the app adopt")
     s.add_argument("id")
     s.add_argument("--doi", required=True)
-    s.add_argument("--title", required=True)
+    s.add_argument("--title", help="the title as read on the PDF")
+    s.add_argument("--title-file", help="read the title from a UTF-8 file, or - for stdin (safer under cmd.exe)")
     s.add_argument("--pages", default="1", help="pages you looked at, e.g. 1,2")
     s.add_argument("--confirmed", action="store_true", help="you really looked at the PDF")
     s.set_defaults(run=cmd_verify)
@@ -691,11 +725,24 @@ def main(argv=None, client=None):
 
 
 def safe_output():
-    """Plain-text output never crashes on a character the console encoding lacks (it becomes '?')."""
+    """Output encoding. A pipe or file (how an AI harness reads kytdl) gets UTF-8, so Chinese text is never garbled
+    (report 2026-11-10: GBK pipes showed only replacement characters); an interactive console keeps its own encoding so
+    it displays correctly. KYTDL_ENCODING overrides both. Nothing ever crashes on an unencodable character."""
+    import os
+    forced = os.environ.get("KYTDL_ENCODING", "").strip()
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(errors="replace")
+            tty = stream.isatty()
         except (AttributeError, ValueError):
+            tty = False
+        try:
+            if forced:
+                stream.reconfigure(encoding=forced, errors="replace")
+            elif not tty:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            else:
+                stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError, LookupError):
             pass
 
 

@@ -79,7 +79,7 @@ def verify(doi, expected_title, get=None):
             continue
         if record is None:
             out["problems"].append("%s 查不到该 DOI" % name)
-        elif expected_title and pp.title_similarity(record["title"], expected_title) >= pp.TITLE_MIN:
+        elif expected_title and pp.title_matches(expected_title, record["title"]):
             records.append(record)
         else:
             out["problems"].append("%s 登记的标题与该文献不符：%s" % (name, record["title"][:80]))

@@ -170,7 +170,7 @@ class WatchTests(unittest.TestCase):
         self.assertEqual("D:/x/a.pdf", done["path"])
         self.assertEqual("finished", lines[-1]["event"])
         self.assertEqual(["b"], lines[-1]["needs"])
-        self.assertEqual(1, code)                                   # something needs the person
+        self.assertEqual(4, code)                                   # a paper needs a decision (not an error)
 
     def test_a_new_note_without_a_status_change_is_reported(self):
         def snap(note):

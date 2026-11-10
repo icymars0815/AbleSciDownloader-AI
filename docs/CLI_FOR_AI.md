@@ -1,12 +1,15 @@
 # 给 AI 的用法：kytdl 命令行
 
 在项目目录下运行 `kytdl <命令> --json`（即 `kytdl.cmd`，等同在项目目录运行 `.venv\Scripts\python.exe -m ablesci`）。
-输出是 JSON；退出码 0 = 正常，1 = 有事要用户决定或业务错误，2 = 服务没运行（先 `kytdl start`），3 = 没有权限（先 `kytdl ai on`）。
+输出是 JSON（写到管道/文件时一律 UTF-8；控制台用它自己的编码；`KYTDL_ENCODING` 可强制指定）。
+退出码：0 = 正常，1 = 错误，2 = 服务没运行（先 `kytdl start`），3 = 没有权限（先 `kytdl ai on`），
+4 = 有文献需要决定（AI 审核、积分确认或要问用户）——不是错误。
 
 ## 原则
 - 静默：不弹窗。只有两种情况去找用户：要花积分（每篇超过免确认额度，或网站要求提高悬赏）；有结果（下载好了 / 拿不到 / 积分不够 / 需要登录）。
 - 花积分只由用户决定：执行 `kytdl ai on --confirmed`、`kytdl confirm ... --confirmed` 之前，先把不带 `--confirmed` 时返回的规则或预览原样告诉用户。
 - `kytdl verify` 只报告你在 PDF 页面图上亲眼读到的 DOI 和标题，不要猜，不要抄条目里的字段。
+- 科研通识别不出 DOI 时，软件先用 Crossref / PubMed 核实文献存在（与清单里的标题比对）才会提交；核实不了就停下（`unverified_reference`），多半是 DOI 写错或文献不存在——告诉用户核对引用。
 
 ## 安装与第一次使用
 ```
@@ -40,9 +43,13 @@ kytdl watch <batch_id> --json         # 放到后台运行（能逐行通知你�
 | done | 把 `path` 告诉用户（`kytdl open <id>` 可替用户打开） |
 | waiting_answer / downloading / adopting / screening | 后台继续；之后用 `kytdl inbox` 取结果 |
 | needs_points | `kytdl confirm <batch_id>` 看预览 → 告诉用户要花多少 → 同意后加 `--confirmed` |
-| needs_check | `kytdl pages <id> --pages 1` → 看图。科研通文件：`kytdl verify <id> --doi ... --title ... --confirmed`；免费全文文件：把读到的 DOI / 标题告诉用户，同意后 `kytdl resolve <id> keep --confirmed`（保留）或 `kytdl resolve <id> request --confirmed`（改走科研通） |
+| needs_check | 这就是“待 AI 审核”（`kytdl status` 的 `pending_ai_review` 也会列出，带 `next`，15 分钟未处理会升级）。`kytdl pages <id> --pages 1` → 看图。科研通文件：`kytdl verify <id> --doi ... --title-file <文件或 -> --confirmed`（cmd.exe 下标题含空格/冒号时用 `--title-file`，`-` 表示从标准输入读）；免费全文文件：把读到的 DOI / 标题告诉用户，同意后 `kytdl resolve <id> keep --confirmed`（保留）或 `kytdl resolve <id> request --confirmed`（改走科研通） |
 | needs_person | 把 `note` 告诉用户（例如网站要求更高悬赏：用户同意后 `kytdl confirm <id> --reward 30 --confirmed`） |
 | not_requested | 看 `note`（例如已有免费全文，或不建议求助） |
+
+软件自己能判的不会交给你：清单里给的是整条引用（作者、期刊、年卷页一起）时，会取出其中的真实标题再核对；
+首页没印 DOI 但标题与作者、摘要等书目信息全吻合，或首页有目标 DOI 且书目标题吻合，都会自动采纳/保留。
+只有证据不足（首页是另一个 DOI、预印本、摘要对不上、读不出）才成为 `pending_ai_review`；预印本会在 `hint` 里写明。
 
 ## 场景 2：AI 自己找到清单
 ```

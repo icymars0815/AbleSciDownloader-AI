@@ -48,7 +48,7 @@ class PublishMixin:
         # Compare with the title as the list cited it. A title that was itself looked up from this DOI would make the check
         # circular (a real DOI attached to an invented citation would pass), so then only the DOI's existence is confirmed.
         item = self.store.get(item_id) or {}
-        cited = "" if item.get("title_from_metadata") else (item.get("title") or "").strip()
+        cited = (item.get("cited_text") or ("" if item.get("title_from_metadata") else item.get("title") or "")).strip()
         result = reference_check.verify(doi, cited or ref_title)
         check["reference_check"] = dict(verified=result["verified"], sources=result["sources"], problems=result["problems"][:6],
                                         against="cited title" if cited else "DOI only (the list gave no title)")

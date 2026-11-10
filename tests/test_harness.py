@@ -176,11 +176,11 @@ class CliTests(unittest.TestCase):
 
     def test_cli_script_runs_as_subprocess(self):
         env = dict(os.environ, ABLESCI_LOCAL_URL=self.base)
-        done = subprocess.run([sys.executable, "-m", "ablesci", "status", "--json"], env=env, capture_output=True, text=True, timeout=60, cwd=ROOT)
+        done = subprocess.run([sys.executable, "-m", "ablesci", "status", "--json"], env=env, capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=ROOT)
         self.assertEqual(0, done.returncode, done.stderr)
         self.assertTrue(json.loads(done.stdout)["running"])
         env["ABLESCI_LOCAL_URL"] = "http://127.0.0.1:1"
-        done = subprocess.run([sys.executable, "-m", "ablesci", "status"], env=env, capture_output=True, text=True, timeout=60, cwd=ROOT)
+        done = subprocess.run([sys.executable, "-m", "ablesci", "status"], env=env, capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=ROOT)
         self.assertEqual(2, done.returncode)
 
 

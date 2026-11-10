@@ -9,7 +9,7 @@ from datetime import datetime
 from ablesci.website.browser_agent import SessionExpired
 from ablesci.flow.notifications import Notifier
 from ablesci.flow import settings as app_settings
-from ablesci.flow.pipeline import FULFILLED, PIPELINE_RULES_VERSION, _auto_adopt_ok, ai_adopt_ok, has_session, stage_of, retry_due_items
+from ablesci.flow.pipeline import FULFILLED, PIPELINE_RULES_VERSION, _auto_adopt_ok, ai_adopt_ok, ai_review_task, local_match_ok, has_session, stage_of, retry_due_items
 
 MONITOR_DEFAULTS = dict(enabled=False, hot_enabled=True, hot_fast_seconds=30, hot_fast_min=5, normal_min=10)
 MONITOR_RANGES = dict(hot_fast_seconds=(20, 120), hot_fast_min=(1, 15), normal_min=(10, 60))
@@ -418,7 +418,7 @@ class Monitor:
         if not (self.takeover(prefs) and item.get("request_confirmed") is True and item.get("request_mcp_auto_publish") is True):
             return False
         forced = dict(prefs, pipeline_auto_adopt=True, pipeline_rules_version=PIPELINE_RULES_VERSION, rejection_mode="manual")
-        return _auto_adopt_ok(item, forced) or ai_adopt_ok(item)
+        return _auto_adopt_ok(item, forced) or ai_adopt_ok(item) or local_match_ok(item)
 
     def scan(self, items):
         """Notify about items that now need the person (deduplicated per item and kind)."""
@@ -434,6 +434,15 @@ class Monitor:
                              for k in ("publish_action", "adopt_action", "reject_action")))
             if stage == "attention" and not in_flight:
                 self.notifier.notify("needs_action", iid, "需处理", title + "需处理：" + str(item.get("note") or item.get("website_status") or "请查看")[:80])
+            elif (stage in ("awaiting_decision", "oa_review") and self.takeover(prefs)
+                  and not self.auto_adopt_pending(item, prefs) and ai_review_task(item)):
+                # AI takeover (user 2026-11-10): an uncertain file goes back to the AI with the exact next step, not to
+                # the person; after 15 minutes without action a second, louder inbox entry says it is still waiting.
+                task = ai_review_task(item)
+                self.notifier.notify("needs_action", iid, "待 AI 审核", "%s的文件需要 AI 审核（%s）。下一步：%s" % (title, task["hint"], task["next"]))
+                if task["escalate"]:
+                    self.notifier.notify("needs_action", iid + ":escalate", "AI 审核已等待 %d 分钟" % task["minutes"],
+                                         "%s已等待 AI 审核 %d 分钟仍未处理。请让 AI 运行 kytdl inbox 处理，或自己查看。" % (title, task["minutes"]))
             elif stage == "awaiting_decision" and item.get("source") == "website":
                 if self.auto_adopt_pending(item, prefs):
                     pass   # AI takeover adopts it within a scheduler pass; the person hears once, after the adoption

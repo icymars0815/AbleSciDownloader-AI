@@ -611,7 +611,10 @@ class RealRun3Tests(unittest.TestCase):
         self.assertTrue(oa_auto_keep_ok(self.oa_item()))
         self.assertFalse(oa_auto_keep_ok(self.oa_item(status="conflict", primary_dois=["10.4014/jmb.2203.03018"])))
         self.assertFalse(oa_auto_keep_ok(self.oa_item(primary_dois=[])))
-        self.assertFalse(oa_auto_keep_ok(self.oa_item(title_score=70.0)))
+        # report 2026-11-10 (Macia/Wang): target DOI on the first page + bibliographic title match is enough even when the
+        # page title scores low (title layout, or a whole citation used as the title); without the DOI it is not
+        self.assertTrue(oa_auto_keep_ok(self.oa_item(title_score=70.0)))
+        self.assertFalse(oa_auto_keep_ok(self.oa_item(title_score=70.0, primary_dois=[])))
         self.assertFalse(oa_auto_keep_ok(self.oa_item(bibliography=dict(status="mismatch", title_status="match"))))
         self.assertFalse(oa_auto_keep_ok(self.oa_item(bibliography=dict(status="unverified", title_status="match", author_status="mismatch"))))
 

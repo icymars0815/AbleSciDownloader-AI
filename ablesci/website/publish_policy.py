@@ -156,6 +156,33 @@ def evaluate_lookup(user_doi, reference_title, scraped):
     return problems
 
 
+def clean_cited_title(given, public):
+    """A whole citation pasted as the title ("Macia L, Tan J, ... <title>. Nat Commun. 2015;6:6734. DOI:"; real lists
+    2026-11-10) drags every title score below the threshold. When the public record's title appears inside the given
+    text, that public title is the real title: returned, else ''."""
+    g, p = normalize(given or ""), normalize(public or "")
+    if len(p) >= 15 and p in g and len(g) > len(p) + 8:
+        return str(public).strip()
+    return ""
+
+
+CITATION_HINTS = re.compile(r"\bet al\b|\bdoi\s*:|\b(?:19|20)\d{2}\s*[;:,]\s*\d|\b(?:19|20)\d{2}\)\s*[;:.,]?\s*\d*|"
+                            r"^[A-Z][A-Za-z'\-]+ [A-Z]{1,3}[,.]", re.I)
+
+
+def looks_like_citation(text):
+    """A whole reference rather than just a title ("Macia L, Tan J, ... 2015;6:6734. DOI:"). Plain titles: no lookup."""
+    text = str(text or "").strip()
+    return bool(CITATION_HINTS.search(text)) or text.count(". ") >= 2
+
+
+def title_matches(cited, title):
+    """The registered `title` fits the `cited` text: similar enough, or contained in a citation-style string."""
+    if title_similarity(cited, title) >= TITLE_MIN:
+        return True
+    return bool(clean_cited_title(cited, title))
+
+
 def is_journal(type_text=None, form_value=None):
     """True for a journal article, from the popup text or the form radio value ("1" on the real site)."""
     return (JOURNAL_TYPE in str(type_text)) if type_text else form_value == "1"

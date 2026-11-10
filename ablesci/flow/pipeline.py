@@ -11,6 +11,7 @@ from ablesci.flow.core import doi_value, now as clock
 from ablesci.papers.metadata import verify_with_metadata, fetch_metadata
 from ablesci.flow.ratelimit import PublishLimiter
 from ablesci.website.rejection_policy import rejection_decision
+from ablesci.website import publish_policy as pp
 
 PIPELINE_RULES_VERSION = "2026-10-19-p1"
 
@@ -223,17 +224,85 @@ def ai_adopt_ok(item):
             and v.get("status") in ("identity_match", "review", "conflict") and not item.get("adopt_action"))
 
 
+def local_match_ok(item):
+    """AI takeover accepts a file whose local check stopped at "review" when the evidence is still strong (real cases
+    2026-11-10: Carlson 2005 had a 100% title and a full bibliographic match but no DOI printed on its first pages):
+    the checked file (sha256), no other DOI on the first pages, and either
+      (a) title >= 90% and the bibliographic check (title, authors, abstract) fully matches, or
+      (b) the target DOI is on the first pages, the bibliographic title matches and nothing contradicts it.
+    Anything weaker (another DOI, a preprint, a differing abstract, an unreadable page) goes to the AI for review."""
+    v, b = item.get("verification") or {}, (item.get("verification") or {}).get("bibliography") or {}
+    target = doi_value(item.get("doi") or "")
+    dois = {doi_value(d or "") for d in v.get("primary_dois") or []}
+    if v.get("status") != "review" or not v.get("sha256") or not target or (dois - {target}) or item.get("adopt_action"):
+        return False
+    if (v.get("title_score") or 0) >= pp.TITLE_MIN * 100 and b.get("status") == "match":
+        return True
+    return (target in dois and b.get("title_status") == "match" and b.get("status") != "mismatch"
+            and b.get("author_status") in ("match", "partial") and b.get("abstract_status") not in ("mismatch", "difference"))
+
+
 def oa_auto_keep_ok(item):
     """AI takeover keeps a free full-text file whose check stopped at "review" only for missing details: the target DOI is
-    on the first pages, the title matches, and nothing (other DOI, authors, abstract, bibliography) points elsewhere."""
-    from ablesci.website import publish_policy
+    on the first pages, the title matches, and nothing (other DOI, authors, abstract, bibliography) points elsewhere;
+    or the same strong local evidence as local_match_ok."""
     v = item.get("verification") or {}
     b = v.get("bibliography") or {}
     target = doi_value(item.get("doi") or "")
-    return (stage_of(item) == "oa_review" and bool(target) and v.get("status") == "review"
-            and target in {doi_value(d or "") for d in v.get("primary_dois") or []}
-            and (v.get("title_score") or 0) >= publish_policy.TITLE_MIN * 100 and b.get("status") != "mismatch"
-            and b.get("title_status") == "match" and "mismatch" not in (b.get("author_status"), b.get("abstract_status")))
+    if stage_of(item) != "oa_review":
+        return False
+    strict = (bool(target) and v.get("status") == "review"
+              and target in {doi_value(d or "") for d in v.get("primary_dois") or []}
+              and (v.get("title_score") or 0) >= pp.TITLE_MIN * 100 and b.get("status") != "mismatch"
+              and b.get("title_status") == "match" and "mismatch" not in (b.get("author_status"), b.get("abstract_status")))
+    # oa files carry no sha256 requirement of their own; reuse the strong-evidence rule with the file's own hash if present
+    return strict or local_match_ok(dict(item, verification=dict(v, sha256=v.get("sha256") or "oa")))
+
+
+PREPRINT_PREFIXES = ("10.1101/", "10.21203/", "10.2139/ssrn", "10.48550/arxiv", "10.20944/preprints", "10.31219/osf", "10.22541/au",
+                     "10.31234/osf", "10.26434/chemrxiv", "10.1002/essoar")
+AI_REVIEW_ESCALATE_MINUTES = 15
+
+
+def preprint_doi(item):
+    """The first-page DOI that marks this file as a preprint of the target (bioRxiv, medRxiv, Research Square, SSRN, ...)."""
+    target = doi_value(item.get("doi") or "")
+    for d in (item.get("verification") or {}).get("primary_dois") or []:
+        d = doi_value(d or "")
+        if d and d != target and d.startswith(PREPRINT_PREFIXES):
+            return d
+    return ""
+
+
+def ai_review_task(item, when=None):
+    """Under AI takeover: the file this paper is waiting on needs the AI to look at it (the strong local rules could not
+    decide). Returns dict(kind, since, minutes, escalate, next, hint) or None. Used by the inbox notice, `kytdl status`
+    (needs_user), needs-attention and `kytdl watch`, so every place gives the same task (real gap, 2026-11-10)."""
+    stage = stage_of(item)
+    if stage == "awaiting_decision" and item.get("source") == "website" and item.get("request_confirmed") is True:
+        if ai_adopt_ok(item) or local_match_ok(item) or (item.get("verification") or {}).get("status") == "identity_match":
+            return None
+        iid = item["id"]
+        nxt = ("kytdl pages %s --pages 1 -> 看图 -> 对得上: kytdl verify %s --doi <首页DOI> --title-file <标题文件> --confirmed；"
+               "对不上或读不出: 告诉用户（驳回只由用户决定）" % (iid, iid))
+    elif stage == "oa_review":
+        if oa_auto_keep_ok(item):
+            return None
+        iid = item["id"]
+        nxt = ("kytdl pages %s --pages 1 -> 看图 -> 告诉用户读到的 DOI/标题；用户同意后 kytdl resolve %s keep --confirmed（保留）"
+               "或 kytdl resolve %s request --confirmed（改走科研通）" % (iid, iid, iid))
+    else:
+        return None
+    since = _time(item.get("checked_at"))
+    when = when or datetime.now().astimezone()
+    minutes = int((when - since).total_seconds() // 60) if since else None
+    v = item.get("verification") or {}
+    hint = "核对结果：%s（标题相似度 %s）" % (v.get("status"), v.get("title_score"))
+    pre = preprint_doi(item)
+    if pre:
+        hint = "首页 DOI %s 是预印本：内容可能与正式发表版不同，保留前请告诉用户" % pre
+    return dict(kind="pending_ai_review", stage=stage, since=item.get("checked_at"), minutes=minutes,
+                escalate=minutes is not None and minutes >= AI_REVIEW_ESCALATE_MINUTES, next=nxt, hint=hint, preprint_doi=pre)
 
 
 VERSION_NOTE = dict(submittedVersion="（注意：这是投稿版，不是出版社正式版）", acceptedVersion="（注意：这是录用稿，不是出版社排版版）")
@@ -644,9 +713,10 @@ class Pipeline:
             if state == "fulfilled" and session and not retry_waiting(target, current_time):
                 planned = step("download", target, "下载应助文件", False, _title(target) + "已有应助文件")
                 return planned if self.execute_mcp(planned) else None
-            if state == "awaiting_decision" and (_auto_adopt_ok(target, settings) or (takeover and ai_adopt_ok(target))):
+            if state == "awaiting_decision" and (_auto_adopt_ok(target, settings) or (takeover and (ai_adopt_ok(target) or local_match_ok(target)))):
                 planned = step("adopt", target, "自动采纳完全匹配的应助", False,
-                               "已通过身份和书目核验" if _auto_adopt_ok(target, settings) else "AI 读取 PDF 后确认 DOI 与标题一致")
+                               "已通过身份和书目核验" if _auto_adopt_ok(target, settings) else
+                               "AI 读取 PDF 后确认 DOI 与标题一致" if ai_adopt_ok(target) else "本地核对：标题与书目吻合")
                 return planned if self.execute_mcp(planned) else None
             # Preserve all answers for the actual points gate. If the gate is open, however,
             # unrelated answers should not preempt an otherwise authorized queued request.
@@ -778,7 +848,7 @@ class Pipeline:
             store.event("已下载并核对免费全文（未消耗积分）：" + title, item_id=item_id, kind="oa")
         else:
             # Non-blocking "oa_review": the user keeps the file as done, or sends the item to 科研通 (file stays on disk).
-            store.update(item_id, pdf=rel, verification=verification, oa_check=check, status="oa_review",
+            store.update(item_id, pdf=rel, verification=verification, oa_check=check, status="oa_review", checked_at=clock(),
                          note="免费全文 PDF 已下载，但核对未完全匹配。请在待审核中选择“保留为完成”，或改走科研通")
             store.event("免费全文 PDF 已下载，但核对未完全匹配，待审核（不影响其他条目）：" + title, item_id=item_id, kind="oa", action="focus")
 
@@ -786,14 +856,27 @@ class Pipeline:
         """DOI-only imports get their title/authors from OpenAlex/Crossref before verification (and a trimmed public record for
         later title comparison). Public lookup only: the DOI is the only thing sent. Returns the refreshed item or None."""
         item = self.store.get(item_id)
-        if not item or not item.get("doi") or (item.get("title") or "").strip():
+        if not item or not item.get("doi") or item.get("cited_text"):
             return None
+        given = (item.get("title") or "").strip()
+        if given and not pp.looks_like_citation(given):
+            return None   # a plain title is used as given; no lookup needed
         try:
             record = fetch_metadata(item["doi"], self.store.root, email)
         except Exception:
             return None
         if not isinstance(record, dict) or record.get("status") != "available" or not record.get("title"):
             return None
+        if given:
+            # A whole citation given as the title: keep the citation as cited_text, use the clean title for every check.
+            clean = pp.clean_cited_title(given, record["title"])
+            if not clean:
+                return None
+            self.store.update(item_id, title=clean[:1000], cited_text=given[:2000],
+                              metadata_ref=dict(title=record["title"], authors=record.get("authors", [])[:50], year=record.get("year"),
+                                                sources=record.get("sources", []), retraction=record.get("retraction"), fetched_at=record.get("fetched_at", "")))
+            self.store.event("清单给的是整条引用，已取出其中的标题：" + clean[:60], item_id=item_id, kind="oa")
+            return self.store.get(item_id)
         changes = dict(title=str(record["title"]).strip()[:1000], title_from_metadata=True,
                        metadata_ref=dict(title=record["title"], authors=record.get("authors", [])[:50], year=record.get("year"),
                                          sources=record.get("sources", []), retraction=record.get("retraction"), fetched_at=record.get("fetched_at", "")))

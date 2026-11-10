@@ -264,6 +264,9 @@ class DownloadMixin:
                 speed_button.click()
                 if charged:
                     app_settings.record_spend(self.store, self.accounts.active_id, 2)
+                # say plainly whether this click cost points (report 2026-11-10: "费用规则核对通过" alone was unclear)
+                self.store.event("高速通道：%s" % ("本次按规则扣 2 积分" if charged else "本次未扣分（积分 ≥500 时高速下载免费，或该文件已付过）"),
+                                 item_id=item_id, kind="download")
                 self.confirm_highspeed(item_id)
                 # Paid attempt: don't cut it off with the free-line cap (real 2026-10-20: high speed ran ~20 KB/s and restarted once).
                 hs_settings = dict(settings, line_max_minutes=longer_minutes(settings))
@@ -532,7 +535,7 @@ class DownloadMixin:
             self.store.update(item_id, status="attention", pdf=str(path.relative_to(self.store.root)), verification=result, **names,
                               note="已保存浏览器返回的文件，但 PDF 解析失败。文件已保留，供检查。")
             raise ValueError("收到文件但 PDF 解析失败，未标记下载成功")
-        self.store.update(item_id, status="downloaded", pdf=str(path.relative_to(self.store.root)), verification=result, **names,
+        self.store.update(item_id, status="downloaded", pdf=str(path.relative_to(self.store.root)), verification=result, checked_at=now(), **names,
                           download_progress=None, note="文件已保存并完成初步核对。请核对版本和完整性后自行采纳。")
         self.store.event("文件已保存（保留科研通原文件名 " + path.name + "）并完成 PDF 核对，未自动采纳或驳回。", item_id=item_id, kind="download", action="focus")
         decision = rejection_decision(self.store.get(item_id), self.store.snapshot().get("preferences", {}))
