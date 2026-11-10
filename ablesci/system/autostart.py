@@ -72,7 +72,7 @@ class Autostart:
         def q(text):
             return "'" + str(text).replace("'", "''") + "'"
         script = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut(%s);$s.TargetPath=%s;$s.Arguments='-m ablesci start';"
-                  "$s.WorkingDirectory=%s;$s.Description='AbleSciDownloader-AI background service (no window)';$s.WindowStyle=7;$s.Save()"
+                  "$s.WorkingDirectory=%s;$s.Description='WenXianTong background service (no window)';$s.WindowStyle=7;$s.Save()"
                   % (q(link), q(self.target()), q(self.root)))
         subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], check=True, capture_output=True, timeout=60,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

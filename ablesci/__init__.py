@@ -1,1 +1,1 @@
-"""AbleSciDownloader-AI: local service + kytdl command line (see README.md)."""
+"""WenXianTong: local service + kytdl command line (see README.md)."""

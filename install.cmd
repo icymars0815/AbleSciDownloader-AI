@@ -1,5 +1,5 @@
 @echo off
-rem AbleSciDownloader-AI one-step install (Windows 10/11). Safe to run again: it only adds what is missing.
+rem WenXianTong one-step install (Windows 10/11). Safe to run again: it only adds what is missing.
 setlocal
 cd /d "%~dp0"
 

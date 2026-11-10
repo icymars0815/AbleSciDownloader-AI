@@ -1,4 +1,4 @@
-# 科研通下载器 AI 版（AbleSciDownloader-AI）
+# 文献通互助（WenXianTong）
 
 让 AI 助手（Claude Code、Codex 等能运行命令的 AI）替你把文献下载下来。你只需要告诉 AI 要哪些文献；
 它先找合法的免费全文，找不到再用**你自己的**科研通账户发求助、等应助、下载、核对、采纳。
@@ -6,7 +6,7 @@
 
 > 第三方开源工具（GNU AGPL-3.0，免费），不是科研通（ablesci.com）官方程序，与科研通无任何隶属或授权关系；付费购买即属受骗。
 > 不使用 Sci-Hub 等影子图书馆。请遵守著作权法、出版商许可、所在机构规定和科研通规则。使用前请读 [DISCLAIMER.md](DISCLAIMER.md)。
-> 这是 [AbleSciDownloader](https://github.com/icymars0815/AbleSciDownloader)（带图形界面的旧版，已停止维护）的命令行继任版本。
+> 这是旧版图形界面工具（已停止维护）的命令行继任版本。原名“科研通下载器 AI 版”，1.4.0 起改名为文献通互助。
 
 ## 它做什么
 
@@ -26,8 +26,8 @@ AI ← kytdl inbox：后台到达的结果
 需要：Python 3.10 或更高；Google Chrome 或 Microsoft Edge（Windows 自带 Edge，所以不用另外下载浏览器）。
 
 ```bat
-git clone https://github.com/icymars0815/AbleSciDownloader-AI.git
-cd AbleSciDownloader-AI
+git clone https://github.com/icymars0815/WenXianTong.git
+cd WenXianTong
 install.cmd
 ```
 
@@ -36,7 +36,7 @@ install.cmd
 
 也可以直接把这句话交给 AI：
 
-> 把 https://github.com/icymars0815/AbleSciDownloader-AI 克隆到本机，运行 install.cmd，然后按 docs/CLI_FOR_AI.md 帮我设置。
+> 把 https://github.com/icymars0815/WenXianTong 克隆到本机，运行 install.cmd，然后按 AI_GUIDE.md 帮我设置。
 
 ## 第一次使用（一次性的三步）
 
@@ -60,7 +60,7 @@ kytdl ai on          :: 显示 AI 接管规则；你同意后：kytdl ai on --co
 2. **AI 帮你找**：AI 用 `kytdl search "关键词"` 找文献，问你“要下载这些吗”，你同意后再 `kytdl get`。
 
 期刊论文、书籍章节、学位论文、书籍都可以求助；非期刊文献科研通要的积分通常更高，超过你同意的额度时会先问你。
-之后 AI 每次开始工作先看 `kytdl inbox`，把后台新到的结果告诉你。AI 的完整用法见 [docs/CLI_FOR_AI.md](docs/CLI_FOR_AI.md)。
+之后 AI 每次开始工作先看 `kytdl inbox`，把后台新到的结果告诉你。AI 的完整用法见 [AI_GUIDE.md](AI_GUIDE.md)。
 
 ## 常用命令
 
@@ -100,7 +100,7 @@ kytdl ai on          :: 显示 AI 接管规则；你同意后：kytdl ai on --co
 目录结构：
 
 ```
-AbleSciDownloader-AI/
+WenXianTong/
 ├─ kytdl.cmd / install.cmd    入口：命令行、一步安装
 ├─ ablesci/                   全部代码（python -m ablesci <命令> 等同 kytdl）
 │  ├─ cli/        kytdl 命令行与本机接口客户端
@@ -110,7 +110,7 @@ AbleSciDownloader-AI/
 │  ├─ papers/     文献：免费全文、书目核对、文献检索、清单导入、Zotero
 │  └─ system/     日志、开机自启、单实例锁、Python/浏览器路径
 ├─ tests/                     单元测试（只用临时数据和虚构文献）
-├─ docs/CLI_FOR_AI.md         给 AI 的用法
+├─ AI_GUIDE.md                给 AI 的完整用法
 └─ data/                      运行时生成：你的队列、PDF、登录信息、日志（不进版本库）
 ```
 

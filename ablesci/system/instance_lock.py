@@ -12,7 +12,7 @@ from pathlib import Path
 
 class AlreadyRunning(RuntimeError):
     def __init__(self, pid):
-        super().__init__("科研通下载器 已在运行（PID %s）" % pid)
+        super().__init__("文献通互助 已在运行（PID %s）" % pid)
         self.pid = pid
 
 

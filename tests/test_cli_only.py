@@ -124,7 +124,7 @@ class CommandTests(unittest.TestCase):
 
 
 class WatchTests(unittest.TestCase):
-    """2026-11-10 (user): the AI should interact with the downloader instead of waiting blindly: one line per change."""
+    """2026-11-10 (user): the AI should interact with the tool instead of waiting blindly: one line per change."""
 
     class SteppingClient:
         """Each state() call returns the next snapshot; the last one repeats."""

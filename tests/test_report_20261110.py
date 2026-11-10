@@ -148,6 +148,35 @@ class CliTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual(TITLE, client.posts[-1][1]["title"])
 
+    def test_a_submit_in_flight_is_requesting_not_a_question_for_the_user(self):
+        item = dict(id="w1", stage="attention", publish_check=dict(kind="submitting"))
+        self.assertEqual(("requesting", False), kytdl.get_row(item, None, {}, 0))
+
+    def test_free_full_text_review_is_decided_by_the_ai(self):
+        self.assertNotIn("告诉用户", kytdl.NEXT_FOR["needs_check"])
+        item = dict(answered(title_score=50.0, bibliography=dict(status="unverified", title_status="review")),
+                    source="import", owned=False, assist_url="", status="oa_review", website_status="")
+        self.assertNotIn("用户同意后", ai_review_task(item)["next"])
+
+    def test_service_starts_with_a_hidden_console_its_children_inherit(self):
+        import subprocess
+        seen = {}
+
+        class Down:
+            def state(self):
+                raise kytdl.ServiceDown("down")
+
+        def fake_popen(argv, **kw):
+            seen.update(kw)
+            raise RuntimeError("stop here")
+        with tempfile.TemporaryDirectory() as folder, patch.object(kytdl, "ROOT", Path(folder)), \
+                patch("subprocess.Popen", fake_popen):
+            with self.assertRaises(RuntimeError):
+                kytdl.ensure_running(Down())
+        flags = seen["creationflags"]
+        self.assertFalse(flags & getattr(subprocess, "DETACHED_PROCESS", 0))   # no console -> node.exe opened a window
+        self.assertEqual(getattr(subprocess, "CREATE_NO_WINDOW", 0), flags & getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
     def test_adopted_paper_is_done_even_if_a_sync_reads_an_unknown_status(self):
         item = dict(id="w1", stage="attention", adopt_action=dict(status="confirmed"))
         self.assertEqual(("done", True), kytdl.get_row(item, None, {}, 0))

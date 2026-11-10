@@ -1,6 +1,6 @@
 # 第三方许可说明
 
-科研通下载器 AI 版（AbleSciDownloader-AI，内部代号 KYTDL）自身代码以 **GNU AGPL-3.0** 发布（见 LICENSE）。
+文献通互助（WenXianTong，内部代号 KYTDL）自身代码以 **GNU AGPL-3.0** 发布（见 LICENSE）。
 选择 AGPL 是因为核心依赖 PyMuPDF 采用 AGPL-3.0（或 Artifex 商业许可），这样整个项目在分发时与其完全兼容。
 
 本项目不包含、不分发任何第三方文献 PDF；`data/` 已从版本库排除，测试用 PDF 为程序生成的虚构内容。

@@ -289,8 +289,8 @@ def ai_review_task(item, when=None):
         if oa_auto_keep_ok(item):
             return None
         iid = item["id"]
-        nxt = ("kytdl pages %s --pages 1 -> 看图 -> 告诉用户读到的 DOI/标题；用户同意后 kytdl resolve %s keep --confirmed（保留）"
-               "或 kytdl resolve %s request --confirmed（改走科研通）" % (iid, iid, iid))
+        nxt = ("kytdl pages %s --pages 1 -> 看图 -> 标题/作者对得上: kytdl resolve %s keep --confirmed（保留）；"
+               "不是这篇: kytdl resolve %s request --confirmed（改走科研通）；读不出才告诉用户" % (iid, iid, iid))
     else:
         return None
     since = _time(item.get("checked_at"))

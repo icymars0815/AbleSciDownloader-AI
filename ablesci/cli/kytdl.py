@@ -1,4 +1,4 @@
-"""kytdl: the command line of AbleSciDownloader-AI (talks to the local background service on 127.0.0.1 only).
+"""kytdl: the command line of WenXianTong (talks to the local background service on 127.0.0.1 only).
 Read-only or local-only commands: nothing here publishes, adopts, rejects or changes 科研通 state itself.
 Spending is only ever decided by the person: `kytdl ai on --confirmed` (AI takeover with its limits) and
 `kytdl confirm ... --confirmed` (one batch / one raised reward). Show the rules or the preview to the user first.
@@ -287,7 +287,9 @@ def ensure_running(client, wait=20):
         return client.state()
     except ServiceDown:
         pass
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+    # CREATE_NO_WINDOW gives the service a hidden console that its children (the browser driver node.exe) inherit.
+    # DETACHED_PROCESS left it with no console at all, so every console child opened a visible window (2026-11-10).
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     logs = ROOT / "data" / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -320,6 +322,8 @@ def get_row(item, batch, first_decision, now, auto=0):
         return "done", True
     if stage == "oa_review":
         return "needs_check", True
+    if (item.get("publish_check") or {}).get("kind") == "submitting":
+        return "requesting", False      # a submit in flight is not a question for anyone (test 2026-11-10)
     if stage == "attention" or (item.get("oa_check") or {}).get("status") == "needs_human" and not item.get("request_confirmed"):
         return "needs_person", True
     if stage == "awaiting_decision":
@@ -338,7 +342,7 @@ def get_row(item, batch, first_decision, now, auto=0):
 NEXT_FOR = {
     "needs_points": "kytdl confirm {batch} 看预览 -> 告诉用户要花多少积分 -> 同意后加 --confirmed",
     "needs_check": "kytdl pages {id} 看首页图 -> 科研通文件: kytdl verify {id} --doi ... --title ... --confirmed；"
-                   "免费全文: 告诉用户读到的 DOI/标题，同意后 kytdl resolve {id} keep|request --confirmed",
+                   "免费全文: AI 自己比对首页的标题/作者，是同一篇就 kytdl resolve {id} keep --confirmed，不是就 request --confirmed",
     "needs_person": "把 note 告诉用户；若是最低悬赏高于已同意金额（site_min_reward），用户同意后 kytdl confirm {id} --reward N --confirmed",
 }
 FINAL_OK = ("done", "not_requested")
@@ -488,8 +492,8 @@ def cmd_get(client, args):
         hints.append("needs_points：先运行 kytdl confirm %s 看预览，告诉用户要花多少积分；同意后加 --confirmed" % batch_id)
     if any(r["status"] == "needs_check" for r in out):
         hints.append("needs_check：kytdl pages <id> 看首页图，读出 DOI 与标题。科研通文件用 kytdl verify <id> --doi ... --title ... --confirmed；"
-                     "免费全文文件把读到的内容告诉用户，用户同意后 kytdl resolve <id> keep --confirmed（保留）或 request --confirmed（改走科研通）")
-    if any(r["status"] in ("waiting_answer", "downloading", "adopting", "screening", "publishing") for r in out):
+                     "免费全文文件由 AI 比对首页标题/作者：同一篇 kytdl resolve <id> keep --confirmed，不是 request --confirmed（改走科研通）")
+    if any(r["status"] in ("waiting_answer", "downloading", "adopting", "screening", "publishing", "requesting") for r in out):
         hints.append("仍在进行的条目会在后台继续；结果出来后用 kytdl inbox 查看并告诉用户")
     return dict(ok=not need, batch_id=batch_id, skipped_duplicates=reply.get("skipped_duplicates", 0), papers=out, next=hints), (NEEDS if need else OK)
 

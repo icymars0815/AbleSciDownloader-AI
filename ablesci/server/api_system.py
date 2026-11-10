@@ -92,7 +92,7 @@ def route_report_analyze(c, h, body, path, origin):
 
 
 def route_report_issue(c, h, body, path, origin):
-    url = applog.issue_url(app_info.REPO_URL, "科研通下载器 问题反馈", "请描述遇到的问题，并附上已保存的错误报告（.md）。提交前请确认报告中不含个人信息。")
+    url = applog.issue_url(app_info.REPO_URL, "文献通互助 问题反馈", "请描述遇到的问题，并附上已保存的错误报告（.md）。提交前请确认报告中不含个人信息。")
     if not url: raise ValueError("仓库地址未设置，无法打开 GitHub Issue")
     return h.respond(200, {"url": url})
 
