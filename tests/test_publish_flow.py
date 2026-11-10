@@ -134,11 +134,18 @@ class PublishCheckTests(PublishBase):
         self.assertIn("标题", self.run_publish(item_id))
         self.assertStopped(item_id, "lookup_mismatch")
 
-    def test_type_must_be_journal_article(self):
+    def test_any_document_type_is_allowed_and_the_minimum_reward_still_guards_the_cost(self):
+        # user 2026-11-10: include every type instead of refusing non-journal ones
+        item_id = self.item()
+        self.script(text=lookup_text(kind="书籍（某章节）", minimum=10), response=dict(code=0))
+        self.run_publish(item_id)
+        self.assertEqual("confirmed", self.store.get(item_id)["publish_action"]["status"])
+
+    def test_thesis_above_the_agreed_amount_stops_before_spending(self):
         item_id = self.item()
         self.script(text=lookup_text(kind="学位论文", minimum=50), response=dict(code=0))
-        self.assertIn("期刊论文", self.run_publish(item_id))
-        self.assertStopped(item_id, "lookup_mismatch")
+        self.run_publish(item_id)
+        self.assertStopped(item_id, "min_reward_raised")     # 50 is above the 10 points agreed for it: ask first
 
     def test_form_readback_must_match(self):
         item_id = self.item()
@@ -493,12 +500,28 @@ class RealDoiLayerFlowTests(PublishBase):
         self.assertEqual("confirmed", self.store.get(item_id)["publish_action"]["status"])
         self.assertEqual(10, self.store.get(item_id)["publish_check"]["min_reward"])
 
-    def test_non_journal_type_on_form_stops(self):
-        self.real_script(type_value="3")
+    def test_book_chapter_on_form_is_published_within_the_agreed_amount(self):
+        self.real_script(type_value="4", low="10")
+        item_id = self.item()
+        self.run_publish(item_id)
+        self.assertEqual("confirmed", self.store.get(item_id)["publish_action"]["status"])
+        self.assertEqual("4", self.store.get(item_id)["publish_check"]["form_type"])
+
+    def test_book_chapter_above_the_agreed_amount_stops(self):
+        # real 2026-11-10: Rehm 2020 (Springer reference-work chapter) asked 30 points; 10 were agreed
+        self.real_script(type_value="4", low="30")
         item_id = self.item()
         self.run_publish(item_id)
         self.assertNotEqual("confirmed", (self.store.get(item_id).get("publish_action") or {}).get("status"))
         self.assertEqual(0, self.page.submit.clicks)
+        self.assertEqual("min_reward_raised", self.store.get(item_id)["publish_check"]["kind"])
+
+    def test_no_type_on_form_stops(self):
+        self.real_script(type_value=None)
+        item_id = self.item()
+        self.run_publish(item_id)
+        self.assertEqual(0, self.page.submit.clicks)
+        self.assertEqual("type_unknown", self.store.get(item_id)["publish_check"]["kind"])
 
 
 class SuccessLayerTests(PublishBase):

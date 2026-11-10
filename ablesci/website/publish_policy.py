@@ -122,8 +122,8 @@ def title_similarity(a, b):
 
 
 def auto_publish_block(titles, doi):
-    """Why this item must never be auto-published (empty string = nothing against it). Non-English titles, supplementary
-    material and (checked later against the layer) non-journal types are for the person to handle."""
+    """Why this item must never be auto-published (empty string = nothing against it). Non-English titles and
+    supplementary material are for the person to handle; other document types (books, chapters, theses) are allowed."""
     for title in titles:
         if CJK.search(title or ""):
             return "标题含中文、日文、韩文等非英文文字：此类文献不支持自动求助，请手动处理"
@@ -151,9 +151,14 @@ def evaluate_lookup(user_doi, reference_title, scraped):
     sim = scraped.get("similarity")
     if sim is not None and sim < SIMILARITY_MIN:
         problems.append("科研通给出的相似度仅 %g%%，低于 %d%%" % (sim, SIMILARITY_MIN))
-    if scraped.get("type") and JOURNAL_TYPE not in str(scraped["type"]):
-        problems.append("文献类型为“%s”，非期刊论文：书籍、章节、学位论文等不自动求助" % scraped["type"])
+    # Every document type is allowed (user, 2026-11-10): books, chapters, theses ... cost more on the site, and the
+    # minimum-reward check (stop above the amount the person agreed to) is what guards that, not the type.
     return problems
+
+
+def is_journal(type_text=None, form_value=None):
+    """True for a journal article, from the popup text or the form radio value ("1" on the real site)."""
+    return (JOURNAL_TYPE in str(type_text)) if type_text else form_value == "1"
 
 
 # ---- failures ----

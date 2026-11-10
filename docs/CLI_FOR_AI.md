@@ -21,10 +21,19 @@ kytdl status                 # needs_user 为空 = 可以开始；否则按每�
 其它设置都不用动：AI 接管时，出版社页面要人工验证就直接改走科研通求助；免费全文 DOI 和标题都对的自动保留（投稿版、录用稿会注明）；
 科研通要求提高悬赏时，在已同意的金额以内自动接受，超过才停下问用户。想开机自动运行：`kytdl autostart on`。
 
-## 场景 1：用户给一个清单
+## 场景 1：用户给一个清单（推荐：边下边处理，不要干等）
 ```
-kytdl get 清单.txt                  # 也可以是 '-'（标准输入）或直接写 DOI / 参考文献文字
+kytdl get 清单.txt --no-wait --json   # 立刻返回 batch_id；清单也可以是 '-'（标准输入）或直接写 DOI / 参考文献文字
+kytdl watch <batch_id> --json         # 放到后台运行（能逐行通知你的方式，如 Claude Code 的 Monitor）
 ```
+`watch` 每有变化输出一行 JSON（`event=paper`：`id`、`status`、`note`；需要处理时带 `next`，最低悬赏不够时带 `site_min_reward`；
+`done` 带本地 `path`），所有文献都有结果后输出 `event=finished` 并退出。收到一行就处理一行：done 的马上告诉用户或放到用户要的位置，
+出错的按 `next` 处理或问用户，不必等整批结束。
+不方便后台运行时，也可以 `kytdl get 清单.txt --json` 一次等到结束（最多 600 秒），过程中同样逐行把进度写到 stderr。
+
+任何文献类型都可以求助（期刊论文、书籍章节、学位论文、书籍……）。非期刊文献在科研通的最低悬赏通常更高（章节 30、学位论文 50、书籍 200），
+超过用户同意的金额时会停下（`needs_person`，`reason=min_reward_raised`），按 `next` 问用户。
+
 逐篇看 `status`：
 | status | 怎么做 |
 |---|---|

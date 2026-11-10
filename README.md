@@ -55,9 +55,11 @@ kytdl ai on          :: 显示 AI 接管规则；你同意后：kytdl ai on --co
 
 两种场景：
 
-1. **你给清单**：“帮我下载这些” → AI 运行 `kytdl get 清单.txt`（或直接传 DOI / 参考文献文字），逐篇告诉你结果和本地路径。
+1. **你给清单**：“帮我下载这些” → AI 运行 `kytdl get 清单.txt --no-wait`（或直接传 DOI / 参考文献文字），再在后台运行 `kytdl watch <批次>`：
+   每篇有进展就输出一行，下载好的 AI 马上告诉你（或放到你指定的文件夹），出问题的那一篇 AI 立刻处理或问你，不用等整批结束。
 2. **AI 帮你找**：AI 用 `kytdl search "关键词"` 找文献，问你“要下载这些吗”，你同意后再 `kytdl get`。
 
+期刊论文、书籍章节、学位论文、书籍都可以求助；非期刊文献科研通要的积分通常更高，超过你同意的额度时会先问你。
 之后 AI 每次开始工作先看 `kytdl inbox`，把后台新到的结果告诉你。AI 的完整用法见 [docs/CLI_FOR_AI.md](docs/CLI_FOR_AI.md)。
 
 ## 常用命令
@@ -67,7 +69,8 @@ kytdl ai on          :: 显示 AI 接管规则；你同意后：kytdl ai on --co
 | `kytdl doctor` | 检查安装（Python、依赖、浏览器、数据目录） |
 | `kytdl start` / `kytdl stop` | 启动 / 停止后台服务 |
 | `kytdl status` | 服务、积分，以及需要你处理的事（`needs_user`） |
-| `kytdl get <清单\|DOI\|->` | 下载一批文献并等待结果 |
+| `kytdl get <清单\|DOI\|-> [--no-wait]` | 下载一批文献（等待结果，或立刻返回批次号） |
+| `kytdl watch <批次\|id>` | 实时进展：每有变化输出一行，全部有结果后退出 |
 | `kytdl inbox [--ack]` | 后台到达的结果 |
 | `kytdl confirm <批次> [--confirmed]` | 预览 / 确认超出免确认额度的积分 |
 | `kytdl open <id> [--folder]` | 用系统程序打开下载好的 PDF |

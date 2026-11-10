@@ -5,6 +5,7 @@ import json
 import tempfile
 import threading
 import unittest
+import unittest.mock
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -120,6 +121,73 @@ class CommandTests(unittest.TestCase):
         for package in ("mcp", "pystray", "pillow"):
             self.assertNotIn(package + ">", requirements)
             self.assertNotIn(package + "=", requirements)
+
+
+class WatchTests(unittest.TestCase):
+    """2026-11-10 (user): the AI should interact with the downloader instead of waiting blindly: one line per change."""
+
+    class SteppingClient:
+        """Each state() call returns the next snapshot; the last one repeats."""
+        def __init__(self, snapshots):
+            self.snapshots, self.calls, self.posts = snapshots, 0, []
+
+        def state(self):
+            snap = self.snapshots[min(self.calls, len(self.snapshots) - 1)]
+            self.calls += 1
+            return snap
+
+        def post(self, path, body=None):
+            self.posts.append((path, body))
+            if path == "/api/import":
+                return dict(ok=True, batch_id="b1", count=2, skipped_duplicates=0)
+            if path == "/api/mcp/result":
+                return dict(local_path="D:/x/%s.pdf" % body["id"])
+            return dict(ok=True)
+
+    @staticmethod
+    def snap(a_stage, b_stage, b_check=None, phase="requesting"):
+        items = [dict(id="a", doi="10.1/a", title="Paper A", stage=a_stage, request_confirmed=True, batch_id="b1"),
+                 dict(id="b", doi="10.1/b", title="Paper B", stage=b_stage, request_confirmed=True, batch_id="b1",
+                      note="stopped", publish_check=b_check or {})]
+        return dict(items=items, batches=[dict(id="b1", phase=phase, items=[dict(id="a"), dict(id="b")])], settings={})
+
+    def test_one_line_per_change_errors_carry_next_and_done_carries_path(self):
+        client = self.SteppingClient([
+            self.snap("submitted", "queued"),
+            self.snap("fulfilled", "attention", dict(kind="min_reward_raised", min_reward=30)),
+            self.snap("done", "attention", dict(kind="min_reward_raised", min_reward=30)),
+        ])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), unittest.mock.patch("time.sleep"):
+            code = kytdl.main(["watch", "b1", "--json", "--interval", "2"], client)
+        lines = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+        events = [(e["id"], e["status"]) for e in lines if e.get("event") == "paper"]
+        self.assertEqual([("a", "waiting_answer"), ("b", "queued"), ("a", "downloading"), ("b", "needs_person"), ("a", "done")], events)
+        stop = next(e for e in lines if e.get("status") == "needs_person")
+        self.assertEqual(("min_reward_raised", 30), (stop["reason"], stop["site_min_reward"]))
+        self.assertIn("kytdl confirm b --reward", stop["next"])
+        done = next(e for e in lines if e.get("status") == "done")
+        self.assertEqual("D:/x/a.pdf", done["path"])
+        self.assertEqual("finished", lines[-1]["event"])
+        self.assertEqual(["b"], lines[-1]["needs"])
+        self.assertEqual(1, code)                                   # something needs the person
+
+    def test_get_no_wait_returns_the_batch_at_once(self):
+        client = self.SteppingClient([self.snap("queued", "queued")])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = kytdl.main(["get", "10.1/a", "--no-wait", "--json"], client)
+        data = json.loads(out.getvalue())
+        self.assertEqual((0, "b1"), (code, data["batch_id"]))
+        self.assertIn("kytdl watch b1", data["next"])
+        self.assertEqual(1, client.calls)                           # only the start-up check, no polling
+
+    def test_unknown_target_is_a_clear_error(self):
+        client = self.SteppingClient([self.snap("queued", "queued")])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(1, kytdl.main(["watch", "nope", "--json"], client))
+        self.assertIn("nope", json.loads(out.getvalue())["error"])
 
 
 if __name__ == "__main__":

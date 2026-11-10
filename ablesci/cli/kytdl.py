@@ -312,6 +312,119 @@ def get_row(item, batch, first_decision, now, auto=0):
     return {"submitted": "waiting_answer", "fulfilled": "downloading"}.get(stage, stage), False
 
 
+NEXT_FOR = {
+    "needs_points": "kytdl confirm {batch} 看预览 -> 告诉用户要花多少积分 -> 同意后加 --confirmed",
+    "needs_check": "kytdl pages {id} 看首页图 -> 科研通文件: kytdl verify {id} --doi ... --title ... --confirmed；"
+                   "免费全文: 告诉用户读到的 DOI/标题，同意后 kytdl resolve {id} keep|request --confirmed",
+    "needs_person": "把 note 告诉用户；若是最低悬赏高于已同意金额（site_min_reward），用户同意后 kytdl confirm {id} --reward N --confirmed",
+}
+FINAL_OK = ("done", "not_requested")
+
+
+def takeover_auto(st):
+    settings_now = st.get("settings") or {}
+    return ((settings_now.get("smart") or {}).get("auto_confirm_max") or 0) if settings_now.get("ai_takeover") else 0
+
+
+def paper_event(item, status, batch_id):
+    """One line for the AI: what changed for this paper and, when it needs someone, what to do next."""
+    ev = dict(event="paper", time=time.strftime("%H:%M:%S"), id=item["id"], doi=item.get("doi", ""),
+              title=clip(item.get("title") or item.get("doi"), 80), status=status, note=clip(item.get("note"), 160))
+    check = item.get("publish_check") or {}
+    if status == "needs_person" and check.get("kind"):
+        ev["reason"] = check["kind"]
+        if isinstance(check.get("min_reward"), int):
+            ev["site_min_reward"] = check["min_reward"]
+    if status in NEXT_FOR:
+        ev["next"] = NEXT_FOR[status].format(batch=batch_id or item.get("batch_id") or "<batch>", id=item["id"])
+    return ev
+
+
+def track(client, target, timeout, emit, interval=3, auto=None):
+    """Follow every paper of `target` (a batch id or one paper id) until each one is final or `timeout` seconds pass.
+    emit(event) is called once per status change. Returns (rows, finished, batch_id); rows = [(item, status, final)]."""
+    first_decision, last, ids, batch_id = {}, {}, None, None
+    start = time.monotonic()
+    while True:
+        st = client.state()
+        if auto is None:
+            auto = takeover_auto(st)
+        batches = {b["id"]: b for b in st.get("batches") or []}
+        if ids is None:
+            if target in batches:
+                batch_id = target
+                ids = [r["id"] for r in batches[target].get("items", [])] or [i["id"] for i in st["items"] if i.get("batch_id") == target]
+            elif any(i["id"] == target for i in st["items"]):
+                ids = [target]
+            else:
+                raise ValueError("未找到批次或条目：" + target)
+        items = {i["id"]: i for i in st["items"] if i["id"] in ids}
+        now = time.monotonic()
+        rows = []
+        for iid in ids:
+            item = items.get(iid)
+            if not item:
+                continue
+            batch = batches.get(batch_id or item.get("batch_id") or "")
+            status, final = get_row(item, batch, first_decision, now, auto)
+            rows.append((item, status, final))
+            if last.get(iid) != status:
+                last[iid] = status
+                emit(paper_event(item, status, batch_id))
+        if rows and all(final for _, _, final in rows):
+            return rows, True, batch_id
+        if now - start >= timeout:
+            return rows, False, batch_id
+        time.sleep(interval)
+
+
+def event_line(ev, as_json):
+    if as_json:
+        return json_text(ev)
+    if ev.get("event") == "paper":
+        text = "%s  %-14s %s  %s" % (ev["time"], ev["status"], ev["id"], ev["title"])
+        if ev.get("note"):
+            text += "  | " + ev["note"]
+        if ev.get("next"):
+            text += "\n    next: " + ev["next"]
+        return text
+    return " ".join("%s=%s" % kv for kv in ev.items())
+
+
+def stream(args, to=None):
+    """An emit() that prints one line per event at once (stdout for watch, stderr for get)."""
+    def emit(ev):
+        print(event_line(ev, args.json), file=to or sys.stdout, flush=True)
+    return emit
+
+
+def cmd_watch(client, args):
+    """Event stream for an AI harness: one line per change (JSON with --json) until every paper is final.
+    Run it in the background; each line is a chance to act (an error has `next`; a finished paper has `path`)."""
+    timeout = max(5, min(args.timeout, 6 * 3600))
+    emit = stream(args)
+
+    def emit_with_path(ev):
+        if ev.get("status") == "done":
+            try:
+                ev["path"] = client.post("/api/mcp/result", {"id": ev["id"]}).get("local_path", "")
+            except (ApiError, ServiceDown):
+                pass
+        emit(ev)
+    rows, finished, batch_id = track(client, args.id, timeout, emit_with_path, interval=max(2, args.interval))
+    counts = {}
+    for _, status, _ in rows:
+        counts[status] = counts.get(status, 0) + 1
+    need = [item["id"] for item, status, _ in rows if status not in FINAL_OK]
+    out = dict(event="finished" if finished else "timeout", target=args.id, counts=counts,
+               all_done=all(status in FINAL_OK for _, status, _ in rows))
+    if not finished:
+        out["next"] = "仍在进行，可再次运行 kytdl watch %s" % args.id
+    elif need:
+        out["needs"] = need
+    return out, OK if out["all_done"] else BUSINESS
+
+
 def cmd_get(client, args):
     st = ensure_running(client)
     reply, code = cmd_import(client, args)
@@ -328,24 +441,15 @@ def cmd_get(client, args):
                      note=clip(i.get("note"), 120)) for i in known]
         return dict(ok=True, already_in_library=True, papers=rows,
                     next=["这些文献已在库中：done 的用 kytdl result <id> 取路径；其余告诉用户当前状态"]), OK
-    batch_id, wait = reply["batch_id"], max(5, min(args.wait, WAIT_MAX_SECONDS))
-    ids = None
-    first_decision = {}
-    settings_now = st.get("settings") or {}
-    auto = ((settings_now.get("smart") or {}).get("auto_confirm_max") or 0) if settings_now.get("ai_takeover") else 0
-    start = time.monotonic()
-    while True:
-        st = client.state()
-        batch = next((b for b in st.get("batches") or [] if b["id"] == batch_id), None)
-        ids = ids or [r["id"] for r in (batch or {}).get("items", [])] or [i["id"] for i in st["items"] if i.get("batch_id") == batch_id]
-        items = {i["id"]: i for i in st["items"] if i["id"] in ids}
-        now = time.monotonic()
-        rows = [(items[i], get_row(items[i], batch, first_decision, now, auto)) for i in ids if i in items]
-        if rows and all(done for _, (_, done) in rows) or now - start >= wait:
-            break
-        time.sleep(3)
+    batch_id = reply["batch_id"]
+    if args.no_wait:
+        return dict(ok=True, batch_id=batch_id, count=reply.get("count"), skipped_duplicates=reply.get("skipped_duplicates", 0),
+                    next="kytdl watch %s --json（后台运行：每有变化输出一行；出错的行带 next）" % batch_id), OK
+    wait = max(5, min(args.wait, WAIT_MAX_SECONDS))
+    # progress goes to stderr line by line, so a waiting caller sees what is happening; the summary stays on stdout
+    rows, _, _ = track(client, batch_id, wait, stream(args, sys.stderr), auto=takeover_auto(st))
     out = []
-    for item, (status, _) in rows:
+    for item, status, _ in rows:
         row = dict(id=item["id"], title=clip(item.get("title") or item.get("doi"), 80), doi=item.get("doi", ""), status=status,
                    reward=item.get("request_reward"), note=clip(item.get("note"), 120))
         if status == "done":
@@ -511,7 +615,13 @@ def parser():
     s = sub.add_parser("get", parents=[common], help="AI workflow: import a list (file, - for stdin, or DOIs/text) and wait for results")
     s.add_argument("source", help="file, '-' for stdin, or the references / DOIs themselves")
     s.add_argument("--wait", type=int, default=GET_WAIT_DEFAULT, help="seconds to wait for results, max 600 (the rest continues in the background)")
+    s.add_argument("--no-wait", action="store_true", help="return the batch id at once; follow it with kytdl watch")
     s.set_defaults(run=cmd_get, allow_text=True)
+    s = sub.add_parser("watch", parents=[common], help="event stream: one line per change of a batch or paper until all are final (run in the background)")
+    s.add_argument("id", help="batch id (from kytdl get --no-wait) or one paper id")
+    s.add_argument("--timeout", type=int, default=3600, help="seconds, max 6 hours (default 1 hour)")
+    s.add_argument("--interval", type=int, default=3, help="seconds between checks (min 2)")
+    s.set_defaults(run=cmd_watch)
     s = sub.add_parser("confirm", parents=[common], help="preview, or with --confirmed confirm, the 科研通 requests of a batch (or re-request one paper with --reward)")
     s.add_argument("target", help="batch id, or a paper id that stopped on a raised minimum reward")
     s.add_argument("--ids", help="comma list of paper ids (default: the recommended rows)")

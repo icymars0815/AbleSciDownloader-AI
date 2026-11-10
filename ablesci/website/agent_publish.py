@@ -176,7 +176,7 @@ class PublishMixin:
         if pp.lookup_undefined(scraped):
             self.publish_retry_later(item_id, check)
 
-        # 2) 二次核对：DOI 精确一致、标题与公开记录 >= 0.90、相似度 >= 50、类型为期刊论文
+        # 2) 二次核对：DOI 精确一致、标题与公开记录 >= 0.90、相似度 >= 50（任何文献类型都可以；费用由最低悬赏规则把关）
         problems = pp.evaluate_lookup(doi, ref_title, scraped)
         if problems:
             self.publish_stop(item_id, "lookup_mismatch", "弹窗中的识别结果与该文献不符，已停止：" + "；".join(problems), dict(check, problems=problems))
@@ -201,8 +201,14 @@ class PublishMixin:
             type_value = page.locator('input[name="Assist[type]"]:checked').get_attribute("value")
         except Exception:
             type_value = None
-        if type_value != "1" and not scraped.get("type"):
-            self.publish_stop(item_id, "not_auto", "表单中的文献类型不是“期刊论文”，不自动求助", dict(check, form_type=type_value))
+        check["form_type"] = type_value
+        if not type_value and not scraped.get("type"):
+            # The site's DOI lookup preselects the type (journal "1", book chapter "4" seen on the real page). With no
+            # type at all the request would be guesswork, so stop rather than submit an incomplete form.
+            self.publish_stop(item_id, "type_unknown", "科研通没有识别出文献类型（表单未选类型），未提交。请在科研通手动求助", check)
+        if not pp.is_journal(scraped.get("type"), type_value):
+            self.store.event("非期刊文献（%s），按科研通要求的最低悬赏处理。" % (scraped.get("type") or "表单类型 %s" % type_value),
+                             item_id=item_id, kind="publish")
         if scraped["min_reward"] is None:
             try:
                 low = re.search(r"\d+", page.locator("#point-low").first.inner_text(timeout=3000))
