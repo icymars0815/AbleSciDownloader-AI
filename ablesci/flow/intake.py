@@ -139,6 +139,8 @@ def classify(item, screened_done=True):
         row.update(code=code, result=result, advice=advice, checked=checked, selectable=selectable)
         return row
     if item.get("request_confirmed") is True:
+        if stage == "done":
+            return done("confirmed", "已确认的求助已完成", "已完成，无需重复求助")
         return done("confirmed", "已确认向科研通求助", "已在求助中")
     if stage == "done" and item.get("done_via") == "oa":
         return done("oa_done", "免费全文已下载，核对通过", "无需求助")
@@ -343,7 +345,7 @@ def requeue_item(store, item, reward, points, who="用户"):
             history.append(dict(target["publish_check"], requeued=now()))
         stamp = now()
         target.update(request_confirmed=False, request_mcp_auto_publish=False, publish_blocked=False, publish_check=None, publish_retry=None,
-                      publish_history=history, status="ready", note="已撤回确认并重新排队，需重新确认后才会求助", updated=stamp,
+                      spending_wait=None, publish_history=history, status="ready", note="已撤回确认并重新排队，需重新确认后才会求助", updated=stamp,
                       **({"request_reward": reward} if reward is not None else {}))
         batch = next((b for b in store.data.get("batches", []) if item["id"] in b.get("item_ids", [])), None)
         if batch:

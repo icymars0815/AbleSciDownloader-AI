@@ -12,7 +12,7 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urljoin, urlparse, urlunparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from ablesci.flow.core import doi_value, now
@@ -262,6 +262,28 @@ class _LandingParser(HTMLParser):
             self.base = a["href"]
 
 
+def is_supplement_url(url):
+    parsed = urlparse(str(url or ""))
+    value = unquote(parsed.path + ("?" + parsed.query if parsed.query else "")).lower()
+    return bool(re.search(r"(?:[./_-]s\d{1,4}(?=[./?&#_-]|$)|supplement(?:ary|al)?(?:[./_?=&-]|$)|supporting[-_ /]information)", value))
+
+
+def sanitize_locations(info):
+    """Also applied to old cached results: derived candidates are revalidated without deleting the cache."""
+    out = dict(info)
+    old = out.get("candidates") or []
+    out["candidates"] = [c for c in old if not is_supplement_url(c.get("url"))]
+    if len(out["candidates"]) < len(old) and not out["candidates"]:
+        out["is_oa"] = False
+    if is_supplement_url(out.get("manual_url")):
+        out["manual_url"] = out["candidates"][0]["url"] if out["candidates"] else None
+    out["landing_urls"] = [u for u in out.get("landing_urls") or [] if not is_supplement_url(u)]
+    if out.get("is_oa") and out.get("oa_status") == "closed":
+        out["source_oa_status"] = out.get("source_oa_status") or "closed"
+        out["oa_status"] = "unknown"  # sources disagree; a candidate is not proof of successful access
+    return out
+
+
 def parse_landing(html_text, base_url):
     """PDF addresses advertised by a landing page: citation_pdf_url, <link rel=alternate type=application/pdf>, meta refresh.
     Absolute, normalized, de-duplicated, in page order. Only the first 2 MB are parsed."""
@@ -276,7 +298,7 @@ def parse_landing(html_text, base_url):
     for raw in parser.urls:
         url = normalize_url(urljoin(base, raw))
         key = url_key(url) if url else None
-        if key and key not in seen:
+        if key and key not in seen and not is_supplement_url(url):
             seen.add(key)
             out.append(url)
     return out
@@ -332,7 +354,7 @@ def _cache_read(root, doi):
             return None
         ttl = CACHE_HIT_TTL if saved["result"].get("candidates") else CACHE_MISS_TTL
         if saved.get("doi") == doi and 0 <= _wall() - saved["cached_at"] < ttl:
-            return dict(saved["result"], cached=True, fetched_at=saved.get("fetched_at"))
+            return dict(sanitize_locations(saved["result"]), cached=True, fetched_at=saved.get("fetched_at"))
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         pass
     return None
@@ -434,9 +456,10 @@ def _find(doi, email, deadline, core_key):
         if url.startswith("ftp://ftp.ncbi.nlm.nih.gov/"):
             url = "https://" + url[6:]
         url = normalize_url(url)
-        if not url:
-            return
+        if not url or is_supplement_url(url):
+            return False
         found.append((_tier(url, repository) if tier is None else tier, len(found), url, source, _version(version)))
+        return True
 
     limited = set()   # hosts that answered 429 (after the one allowed retry) during this lookup: skipped from then on
 
@@ -552,9 +575,8 @@ def _find(doi, email, deadline, core_key):
     if isinstance(s2, dict):
         info["ok"] = True
         pdf = (s2.get("openAccessPdf") or {}).get("url")
-        if pdf:
+        if pdf and add(pdf, "Semantic Scholar"):
             info["is_oa"] = True
-            add(pdf, "Semantic Scholar")
         set_pmcid((s2.get("externalIds") or {}).get("PubMedCentral"))
     # 6. Unpaywall only when the user supplied a contact email
     if email:
@@ -622,10 +644,10 @@ def _find(doi, email, deadline, core_key):
     landing = list(dict.fromkeys(info["landing"]))
     if info["is_oa"] and "https://doi.org/" + doi not in landing:
         landing.append("https://doi.org/" + doi)
-    return dict(candidates=candidates, is_oa=info["is_oa"], oa_status=info["oa_status"], license=info["license"],
+    return sanitize_locations(dict(candidates=candidates, is_oa=info["is_oa"], oa_status=info["oa_status"], license=info["license"],
                 pmcid=info["pmcid"], attempts=attempts, lookup_ok=info["ok"], landing_urls=landing[:2],
                 version=next((c["version"] for c in candidates if c.get("version")), None),
-                manual_url=_web_url(info["manual_url"]) or (candidates[0]["url"] if candidates else None))
+                manual_url=_web_url(info["manual_url"]) or (candidates[0]["url"] if candidates else None)))
 
 
 def _save(dest, body):
@@ -646,6 +668,9 @@ def download_oa(candidates, dest_path, deadline=None):
         url, source = (candidate, "") if isinstance(candidate, str) else (candidate.get("url", ""), candidate.get("source", ""))
         record = dict(kind="download", source=source, host=_host(url), status=None, bytes=0, ok=False)
         attempts.append(record)
+        if is_supplement_url(url):
+            record["status"] = "skipped (supplement)"
+            continue
         if _expired(deadline):
             record["status"] = "time cap"
             break
@@ -785,6 +810,7 @@ def lookup_only(doi, email="", core_api_key="", cache_root=None):
     info = find_oa_locations(doi, email, time.monotonic() + TOTAL_CAP, core_api_key, cache_root)
     status = "found" if info["candidates"] else ("not_oa" if info["lookup_ok"] and not info["is_oa"] else "failed")
     return dict(status=status, oa_status=info["oa_status"], is_oa=info["is_oa"], license=info["license"], source=None,
+                source_oa_status=info.get("source_oa_status"),
                 attempts=info["attempts"], challenge=False, manual_url=None, links=info["candidates"][:8], landing_url=info["manual_url"],
                 version=info.get("version"), cached=bool(info.get("cached")), fetched_at=info.get("fetched_at"))
 
@@ -800,6 +826,7 @@ def fetch_open_access(doi, dest_path, email="", total_cap=TOTAL_CAP, browser=Non
                     manual_url=candidates[0]["url"] if candidates else None)
     else:
         info = find_oa_locations(doi, email, deadline, core_api_key, cache_root)
+    info = sanitize_locations(info)
     got = download_oa(info["candidates"], dest_path, deadline)
     landing_attempts = []
     if not got["ok"] and info["is_oa"] and info["candidates"] is not None and not got.get("challenge_url") and not Path(dest_path).exists():
@@ -844,6 +871,7 @@ def fetch_open_access(doi, dest_path, email="", total_cap=TOTAL_CAP, browser=Non
     elif status is None:
         status = "not_oa" if info["lookup_ok"] and not info["is_oa"] and not info["candidates"] else "failed"
     return dict(status=status, oa_status=info["oa_status"], is_oa=info["is_oa"], license=info["license"], source=source,
+                source_oa_status=info.get("source_oa_status"),
                 version=version, attempts=attempts, challenge=challenge, links=info["candidates"][:8], landing_url=info["manual_url"],
                 manual_url=manual if status in ("failed", "needs_human") and info["is_oa"] else None)
 

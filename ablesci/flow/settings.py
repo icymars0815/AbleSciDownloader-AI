@@ -163,6 +163,39 @@ def cap_block(prefs, account, amount, when=None):
     return ""
 
 
+def pending_cost(item, default=10):
+    recorded = (item.get("spending_wait") or {}).get("points")
+    return recorded if _is_int(recorded) and recorded > 0 else item.get("request_reward") or default
+
+
+def daily_cap_task(prefs, account, items=(), when=None):
+    """An actionable question for the driving AI; never expands authorization itself."""
+    cfg = smart(prefs)
+    if not cfg["enabled"]:
+        return None
+    from ablesci.flow.pipeline import stage_of
+    pending = [i for i in items if i.get("request_confirmed") is True and not i.get("publish_blocked")
+               and ((i.get("stage") or stage_of(i)) == "queued" or
+                    ((i.get("spending_wait") or {}).get("operation") == "download" and (i.get("stage") or stage_of(i)) in ("attention", "fulfilled")))]
+    item = next((i for i in pending if cap_block(prefs, account, pending_cost(i, prefs.get("default_reward") or 10), when)), None)
+    amount = pending_cost(item, prefs.get("default_reward") or 10) if item else 1
+    if not cap_block(prefs, account, amount, when):
+        return None
+    spent = spent_today(account, when)
+    proposed = spent + amount
+    command = "kytdl ai on --daily-cap %d --confirmed" % proposed if proposed <= CAP_RANGE[1] else None
+    prompt = "今日已花费 %d 积分，上限 %d 积分%s。是否同意将今日上限调到 %d 积分并继续？" % (
+        spent, cfg["daily_cap"], "，下一笔需要 %d 积分" % amount if item else "", proposed)
+    if command is None:
+        prompt = "今日已花费 %d 积分，下一笔 %d 积分将超过可设置的最高上限 %d。请问后续任务如何安排？" % (spent, amount, CAP_RANGE[1])
+    return dict(kind="daily_cap_reached", id=item.get("id") if item else None, requires_user=True,
+                spent_today=spent, daily_cap=cfg["daily_cap"], next_points=amount,
+                suggested_daily_cap=proposed, prompt=prompt, confirmation_command=command,
+                next="立即把 prompt 告诉用户并询问；用户同意具体新上限后执行 confirmation_command，再继续 watch；不同意则保持现有限制。" if command else
+                     "立即告诉用户已达到可设置的上限，询问后续安排；不要继续花费。",
+                key="%s:%d:%d:%d" % (_day(when), spent, cfg["daily_cap"], amount))
+
+
 # ---- the one place to read every effective setting ----
 def effective(prefs, account=None, account_id=None):
     """Effective values of all setting groups, as the rest of the app interprets them (read-only view for the UI, MCP and docs)."""

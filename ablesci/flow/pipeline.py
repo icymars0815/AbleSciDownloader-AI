@@ -7,7 +7,7 @@ from datetime import datetime
 from ablesci.papers import oa_fetch
 from ablesci.flow import settings as app_settings
 from ablesci.papers import zotero_bridge
-from ablesci.flow.core import doi_value, now as clock
+from ablesci.flow.core import doi_value, now as clock, review_blockers
 from ablesci.papers.metadata import verify_with_metadata, fetch_metadata
 from ablesci.flow.ratelimit import PublishLimiter
 from ablesci.website.rejection_policy import rejection_decision
@@ -208,7 +208,7 @@ def rules_ok(prefs, key):
 
 def _auto_adopt_ok(item, prefs):
     v = item.get("verification") or {}
-    return (rules_ok(prefs, "pipeline_auto_adopt") and v.get("status") == "identity_match" and bool(v.get("sha256"))
+    return (not review_blockers(v) and rules_ok(prefs, "pipeline_auto_adopt") and v.get("status") == "identity_match" and bool(v.get("sha256"))
             and (v.get("bibliography") or {}).get("status") == "match" and not item.get("adopt_action")
             and rejection_decision(item, prefs)["eligible"])
 
@@ -219,7 +219,12 @@ def ai_adopt_ok(item):
     (sha256), an exact DOI match, and never when the bibliographic check says the paper is a different one."""
     v, a = item.get("verification") or {}, item.get("ai_verification") or {}
     target = doi_value(item.get("doi") or "")
-    return (a.get("status") == "passed" and bool(v.get("sha256")) and a.get("sha256") == v.get("sha256") and bool(target)
+    blocked = set(review_blockers(v))
+    if a.get("document_version") in ("acceptedVersion", "submittedVersion"):
+        blocked.discard("publication_version")
+    if a.get("reviewed_title_critical") is True:
+        blocked.discard("title_critical_difference")
+    return (not blocked and a.get("status") == "passed" and bool(v.get("sha256")) and a.get("sha256") == v.get("sha256") and bool(target)
             and doi_value(a.get("doi") or "") == target and (v.get("bibliography") or {}).get("status") != "mismatch"
             and v.get("status") in ("identity_match", "review", "conflict") and not item.get("adopt_action"))
 
@@ -234,7 +239,7 @@ def local_match_ok(item):
     v, b = item.get("verification") or {}, (item.get("verification") or {}).get("bibliography") or {}
     target = doi_value(item.get("doi") or "")
     dois = {doi_value(d or "") for d in v.get("primary_dois") or []}
-    if v.get("status") != "review" or not v.get("sha256") or not target or (dois - {target}) or item.get("adopt_action"):
+    if review_blockers(v) or v.get("status") != "review" or not v.get("sha256") or not target or (dois - {target}) or item.get("adopt_action"):
         return False
     if (v.get("title_score") or 0) >= pp.TITLE_MIN * 100 and b.get("status") == "match":
         return True
@@ -248,6 +253,8 @@ def oa_auto_keep_ok(item):
     or the same strong local evidence as local_match_ok."""
     v = item.get("verification") or {}
     b = v.get("bibliography") or {}
+    if review_blockers(v):
+        return False
     target = doi_value(item.get("doi") or "")
     if stage_of(item) != "oa_review":
         return False
@@ -280,7 +287,7 @@ def ai_review_task(item, when=None):
     (needs_user), needs-attention and `kytdl watch`, so every place gives the same task (real gap, 2026-11-10)."""
     stage = stage_of(item)
     if stage == "awaiting_decision" and item.get("source") == "website" and item.get("request_confirmed") is True:
-        if ai_adopt_ok(item) or local_match_ok(item) or (item.get("verification") or {}).get("status") == "identity_match":
+        if ai_adopt_ok(item) or (not review_blockers(item.get("verification")) and (local_match_ok(item) or (item.get("verification") or {}).get("status") == "identity_match")):
             return None
         iid = item["id"]
         nxt = ("kytdl pages %s --pages 1 -> 看图 -> 对得上: kytdl verify %s --doi <首页DOI> --title-file <标题文件> --confirmed；"
@@ -309,6 +316,16 @@ def ai_review_task(item, when=None):
     minutes = int((when - since).total_seconds() // 60) if since else None
     v = item.get("verification") or {}
     hint = "核对结果：%s（标题相似度 %s）" % (v.get("status"), v.get("title_score"))
+    blockers = review_blockers(v)
+    if blockers:
+        hint = "需明确处理：%s；%s" % ("、".join(blockers), v.get("reason") or "禁止自动完成")
+        if set(blockers) <= {"publication_version", "title_critical_difference"}:
+            nxt = ("kytdl text %s --json，再 kytdl pages %s 看原图；由 AI 核对是否同篇及版本。DOI/标题与目标相同且可采用时，"
+                   "verify 提交原图读到的完整标题（含关键数字/否定词）；如为稿件版本加 --document-version acceptedVersion 或 submittedVersion，并向用户说明版本；DOI 不同不能据标题直接确认。" % (item["id"], item["id"]))
+        else:
+            nxt = "kytdl text %s --json 查看提取材料，再 kytdl pages %s 看原图；把撤稿或补充材料等问题告诉用户，由用户决定；不得仅凭 DOI/标题自动采纳" % (item["id"], item["id"])
+    else:
+        nxt = "kytdl text %s --json 获取本地 Markdown 辅助材料；" % item["id"] + nxt
     pre = preprint_doi(item)
     if pre:
         hint = "首页 DOI %s 是预印本：内容可能与正式发表版不同，保留前请告诉用户" % pre
@@ -425,7 +442,7 @@ def next_step(items, account, prefs, now, session=True, local=True):
             # Point at the answer that has to be handled: that is where the person (or adopt/reject) must act.
             holder = next((i for i in items if i["id"] == blocked["item_id"]), item)
             return step("wait_user", holder, "需先处理已收到的应助", True, blocked["reason"])
-        over = app_settings.cap_block(prefs, account, reward, now)
+        over = app_settings.cap_block(prefs, account, app_settings.pending_cost(item, reward), now)
         if over:
             return step("wait_user", item, "已达每日花费上限", True, over)
         if not rules_ok(prefs, "pipeline_auto_publish"):
@@ -516,8 +533,11 @@ class Pipeline:
             self.watchdog()
             try:
                 self.screen_step()
+                self.notify_zotero_readiness()
                 self.ai_auto_keep_oa()
                 self.ai_auto_confirm()
+                self.resume_spending_waits()
+                self.notify_spending_limit()
                 self.tick()
                 self.tick_mcp_authorized()
             except Exception as exc:
@@ -536,18 +556,40 @@ class Pipeline:
         """Before a 科研通 request: is this DOI already in the user's Zotero library? Stored as item.zotero_check."""
         cfg = zotero_bridge.settings(self.store.snapshot().get("preferences", {}))
         item = self.store.get(item_id) or {}
-        if not cfg["check"] or not item.get("doi") or item.get("zotero_check"):
+        old = item.get("zotero_check") or {}
+        checked = _time(old.get("time"))
+        try:
+            age = (datetime.now().astimezone() - checked).total_seconds() if checked else None
+        except TypeError:
+            age = None
+        if not cfg["check"] or not item.get("doi") or (old and age is not None and age < (60 if old.get("status") == "unavailable" else 300)):
             return None
         try:
             found = zotero_bridge.find(item["doi"])
         except zotero_bridge.ZoteroUnavailable as exc:
-            return dict(status="unavailable", reason=str(exc)[:120])
+            result = dict(status="unavailable", reason=str(exc)[:120], time=clock())
+            self.store.update(item_id, zotero_check=result)
+            return result
         result = dict(found, status="checked", time=clock())
         self.store.update(item_id, zotero_check=result)
         if found["found"]:
             self.store.event("Zotero 文献库中已有该文献%s：%s" % ("（含 PDF）" if found["has_pdf"] else "（无 PDF）", (item.get("title") or item["doi"])[:40]),
                              item_id=item_id, kind="zotero")
         return result
+
+    def notify_zotero_readiness(self):
+        items, _, prefs, _ = self._view()
+        notifier = getattr(self, "notifier", None)
+        if notifier is None or not zotero_bridge.settings(prefs)["check"]:
+            return
+        health = zotero_bridge.readiness(prefs)
+        prefix = "account:zotero:%s:" % self.accounts.active_id
+        key = prefix + "unavailable"
+        if health["state"] == "ready":
+            notifier.resolve_inbox(prefix)
+            notifier.reset(key, "needs_action")
+        elif any(stage_of(i) == "queued" for i in items):
+            notifier.notify("needs_action", key, "Zotero 库存尚未核实", health["prompt"] + " " + health["next"])
 
     def zotero_step(self):
         """Send the next verified PDF to Zotero (one at a time, in its own thread)."""
@@ -600,6 +642,39 @@ class Pipeline:
         self.store.event("已存入 Zotero（标签 KYTDL，%s）：%s" % (where, (item.get("title") or "")[:40]), item_id=item_id, kind="zotero")
 
     # ---- AI takeover (settings.ai_takeover; docs/AI_TAKEOVER_20261109.md) ----
+    def resume_spending_waits(self):
+        """Resume a known answered file held only by the daily fee guard, without re-publishing it."""
+        items, account, prefs, _ = self._view()
+        if not app_settings.ai_takeover(prefs, self.accounts.active_id):
+            return []
+        resumed = []
+        for item in items:
+            wait = item.get("spending_wait") or {}
+            if (wait.get("operation") != "download" or item.get("request_confirmed") is not True
+                    or item.get("source") != "website" or not item.get("owned") or item.get("pdf")
+                    or item.get("website_status") not in FULFILLED or item.get("status") != "attention"
+                    or any((item.get(k) or {}).get("status") in ("attempted", "uncertain") for k in ("publish_action", "adopt_action", "reject_action"))
+                    or app_settings.cap_block(prefs, account, app_settings.pending_cost(item))):
+                continue
+            self.store.update(item["id"], status="published", download_failure=None, download_retry=None,
+                              spending_wait=None, note="用户调整额度或跨日后，已恢复已应助文件的下载")
+            resumed.append(item["id"])
+        return resumed
+
+    def notify_spending_limit(self):
+        items, account, prefs, _ = self._view()
+        notifier = getattr(self, "notifier", None)
+        if not app_settings.ai_takeover(prefs, self.accounts.active_id) or notifier is None:
+            return None
+        task = app_settings.daily_cap_task(prefs, account, items)
+        prefix = "account:daily_cap:%s:" % self.accounts.active_id
+        key = prefix + task["key"] if task else None
+        notifier.resolve_inbox(prefix, keep=key)
+        if task:
+            notifier.notify("min_bounty", key, "需要用户确认继续花费",
+                            task["prompt"] + " " + task["next"] + (" 确认后：" + task["confirmation_command"] if task["confirmation_command"] else ""))
+        return task
+
     def ai_auto_keep_oa(self):
         """Under AI takeover a free full-text file that matches the paper is kept as the result without asking
         (oa_auto_keep_ok); anything that might be another paper stays under review for the AI / person."""

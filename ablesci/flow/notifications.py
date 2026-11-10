@@ -139,13 +139,24 @@ class Notifier:
                 if old.get("item_id") == target and not old.get("acked"):
                     old.update(acked=True, superseded=seq)
         inbox.append(dict(seq=seq, time=datetime.now().astimezone().isoformat(timespec="seconds"), kind=kind, title=title,
-                          message=message, item_id="" if key.startswith("batch:") else target,
+                          message=message, key=key, item_id="" if key.startswith("batch:") else target,
                           batch_id=target if key.startswith("batch:") else "", acked=False))
         del inbox[:-INBOX_KEEP]
 
     def inbox(self, include_acked=False):
         with self.lock:
             return [dict(e) for e in self.state.get("inbox", []) if include_acked or not e.get("acked")]
+
+    def resolve_inbox(self, prefix, keep=None):
+        """Retire an obsolete limit question after approval/day rollover; retain its audit record."""
+        with self.lock:
+            changed = False
+            for entry in self.state.get("inbox", []):
+                if entry.get("key", "").startswith(prefix) and entry.get("key") != keep and not entry.get("acked"):
+                    entry.update(acked=True, resolved=True)
+                    changed = True
+            if changed:
+                self._save()
 
     def ack(self, seqs=None):
         """Mark inbox entries as relayed to the person (all of them when seqs is None). Returns how many changed."""

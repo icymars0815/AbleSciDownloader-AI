@@ -14,7 +14,7 @@ from ablesci.website import publish_policy as pp
 from ablesci.papers import oa_fetch
 from ablesci.flow import settings as app_settings
 from ablesci.papers import zotero_bridge
-from ablesci.flow.core import doi_value, now
+from ablesci.flow.core import doi_value, now, review_blockers, critical_title_difference
 from ablesci.flow.pipeline import stage_of, acquisition_state, gate, next_step, ai_review_task, PIPELINE_RULES_VERSION
 
 TOKEN_TTL = 300
@@ -227,13 +227,13 @@ class McpApi:
             setup.append(dict(kind="smart_mode_off", reason="智能模式未开启：中途可能因权限、最低悬赏上调或同步设置而停下",
                               next="suggest the user turns on 智能模式 in the App settings (one switch; it shows exactly what it sets)"))
         else:
-            over = app_settings.cap_block(prefs, account_now, 1)
-            if over:
-                account.append(dict(kind="daily_cap_reached", reason=over, next="tell the user; publishing resumes tomorrow or after they raise the cap"))
+            task = app_settings.daily_cap_task(prefs, account_now, mine)
+            if task:
+                account.append(dict(task, reason=task["prompt"]))
         zcfg = zotero_bridge.settings(prefs)
         if not zcfg["enabled"] and not zcfg["prompted"] and zotero_bridge.status()["running"]:
             setup.append(dict(kind="zotero_available", reason="检测到 Zotero 正在运行，Zotero 联动未开启（可选）：求助前按 DOI 查重，核对通过的全文自动存入 Zotero",
-                              next="ask the user once whether to enable it; then set_zotero_integration(enabled=true|false, confirmed=true)"))
+                              next="询问一次是否开启库存查询和核对后自动入库；同意后 kytdl zotero on --confirmed；分类可用 --collection 指定"))
         elif zcfg["check"] and zotero_bridge.status()["running"] and not zotero_bridge.status()["local_api"]:
             setup.append(dict(kind="zotero_local_api_off", reason="Zotero 联动已开启，但 Zotero 本地接口未开启，无法查重（存入不受影响）",
                               next="tell the user: Zotero 设置 > 高级 > 勾选“允许其他应用程序与 Zotero 通信”"))
@@ -249,9 +249,26 @@ class McpApi:
         """Optional Zotero integration, on or off as the user answered (local only: no points, no website action)."""
         if body.get("confirmed") is not True or not isinstance(body.get("enabled"), bool):
             raise ValueError("请先问用户是否开启 Zotero 联动，按用户回答带 enabled 和 confirmed=true")
-        self.store.update_preferences(**zotero_bridge.validate(dict(enabled=body["enabled"])))
+        changes = {key: body[key] for key in ("enabled", "check", "save", "collection") if key in body}
+        self.store.update_preferences(**zotero_bridge.validate(changes))
         self.store.event("Zotero 联动已" + ("开启" if body["enabled"] else "保持关闭") + "（外部工具按用户回答设置）", kind="zotero")
         return dict(ok=True, zotero=dict(zotero_bridge.settings(self.store.snapshot().get("preferences", {})), **zotero_bridge.status(fresh=True)))
+
+    def do_zotero_status(self, body):
+        return dict(ok=True, **zotero_bridge.readiness(self.store.snapshot().get("preferences", {}), fresh=True))
+
+    def do_zotero_find(self, body):
+        doi = doi_value(str(body.get("doi") or ""))
+        if not doi:
+            raise ValueError("需要有效 DOI")
+        try:
+            result = zotero_bridge.find(doi)
+            return dict(ok=True, state="found" if result["found"] else "not_found", doi=doi, **result,
+                        library_scope="personal_library", local_pdf_verified=False,
+                        note="has_pdf 表示库中存在 PDF 附件记录；尚未确认文件已下载到本机且可读")
+        except zotero_bridge.ZoteroUnavailable as exc:
+            return dict(ok=False, state="unavailable", found=None, has_pdf=None, doi=doi, reason=str(exc),
+                        next="打开 Zotero 并检查 Local API 后重试；本次结果不能解释为无库存")
 
     # ---- adopt (guarded like reject: verified file + explicit confirmation) ----
     def do_adopt(self, body):
@@ -290,7 +307,7 @@ class McpApi:
         if not app_settings.ai_takeover(prefs, self.accounts.active_id):
             raise ValueError("仅在 AI 接管（智能模式 + MCP 网站操作）开启时可用")
         if body.get("confirmed") is not True:
-            raise ValueError("请先亲自查看 PDF 首页，读出其中印的 DOI 与标题后带 confirmed=true 提交")
+            raise ValueError("请先读取 PDF 首页或本地 Markdown，读出其中的 DOI 与标题后带 confirmed=true 提交")
         item = self.item(body.get("id"))
         if item.get("source") != "website" or not item.get("owned") or stage_of(item) != "awaiting_decision" or item.get("adopt_action"):
             raise ValueError("仅可核对本人求助中已下载、等待决定且未处理过的应助")
@@ -301,6 +318,11 @@ class McpApi:
         import hashlib
         if hashlib.sha256(path.read_bytes()).hexdigest() != v["sha256"]:
             raise ValueError("PDF 在核对后已变化，请重新核对")
+        evidence = body.get("evidence", "pages")
+        if evidence not in ("pages", "markdown"):
+            raise ValueError("不支持的审核证据类型")
+        if evidence == "markdown" and body.get("sha256") != v["sha256"]:
+            raise ValueError("Markdown 审核必须提交 kytdl text 返回的当前 PDF SHA256")
         target = doi_value(item.get("doi") or "")
         if not target:
             raise ValueError("该条目没有 DOI，无法用 AI 核对代替人工判断")
@@ -309,6 +331,17 @@ class McpApi:
         reference = (item.get("metadata_ref") or {}).get("title") or item.get("title") or ""
         score = pp.title_similarity(seen_title, reference)
         problems = []
+        blockers = set(review_blockers(v))
+        document_version = body.get("document_version")
+        if document_version is not None and document_version not in ("acceptedVersion", "submittedVersion"):
+            raise ValueError("版本类型无效")
+        if document_version in ("acceptedVersion", "submittedVersion"):
+            blockers.discard("publication_version")
+        reviewed_title_critical = not critical_title_difference(reference, seen_title)["conflict"]
+        if reviewed_title_critical:
+            blockers.discard("title_critical_difference")
+        if blockers:
+            problems.append("存在需明确处理的复核原因：" + "、".join(sorted(blockers)))
         if seen_doi != target:
             problems.append("PDF 上的 DOI（%s）与目标 DOI 不一致" % (seen_doi or "未读到"))
         if score < pp.TITLE_MIN:
@@ -317,7 +350,8 @@ class McpApi:
             problems.append("本地书目核对显示是另一篇文献")
         pages = [p for p in (body.get("pages") or []) if isinstance(p, int) and not isinstance(p, bool)][:5]
         entry = dict(time=now(), status="failed" if problems else "passed", doi=seen_doi, title=seen_title, title_score=round(score, 3),
-                     sha256=v["sha256"], pages=pages, problems=problems, source="external_harness")
+                     sha256=v["sha256"], pages=pages, problems=problems, source="external_harness", evidence=evidence,
+                     document_version=document_version, reviewed_title_critical=reviewed_title_critical)
         self.store.update(item["id"], ai_verification=entry)
         self.store.event(("AI 读取 PDF 核对通过，将自动采纳：" if not problems else "AI 读取 PDF 核对未通过（" + "；".join(problems) + "）：")
                          + (item.get("title") or "")[:40], item_id=item["id"], kind="adopt" if not problems else "needs_action")
@@ -363,16 +397,30 @@ class McpApi:
         retraction = v.get("retraction") or (item.get("metadata") or {}).get("retraction") or {}
         check = item.get("oa_check") or {}
         mine = [i for i in self.store.snapshot().get("items", []) if i.get("account_id", "default") == self.accounts.active_id]
+        stage = stage_of(item)
+        automatic_pending = (app_settings.ai_takeover(self.store.snapshot().get("preferences", {}), self.accounts.active_id)
+                             and stage in ("awaiting_decision", "oa_review") and ai_review_task(item) is None)
         return dict(
-            id=item["id"], title=item.get("title", ""), doi=item.get("doi", ""), stage=stage_of(item), has_pdf=path is not None,
+            id=item["id"], title=item.get("title", ""), doi=item.get("doi", ""), stage=stage, has_pdf=path is not None,
+            automatic_pending=automatic_pending,
             acquisition=acquisition_state(item, gate(mine, self.points(), item.get("request_reward"))),
             local_path=str(path) if path else "", original_filename=item.get("original_filename", ""), local_filename=item.get("local_filename", "") or (path.name if path else ""),
             size_bytes=path.stat().st_size if path else 0,
-            verification=dict({k: v.get(k) for k in ("status", "reason", "title_score", "primary_dois", "pages")},
+            verification=dict({k: v.get(k) for k in ("status", "reason", "title_score", "primary_dois", "pages", "title_text_order", "title_critical_tokens", "document_kind", "review_blockers", "version_marker", "verified_from", "markdown_path", "manifest_path", "markdown_sha256")},
                               bibliography={k: b.get(k) for k in ("status", "sources", "title_status", "author_status", "abstract_status", "abstract_score", "matched_authors", "missing_authors")}),
             retraction=dict(retracted=retraction.get("retracted"), updates=(retraction.get("updates") or [])[:5], source=retraction.get("source")),
-            version=check.get("version") or "", via="oa" if item.get("done_via") == "oa" else ("website" if item.get("source") == "website" else ""),
+            version=check.get("version") or (item.get("ai_verification") or {}).get("document_version") or "", via="oa" if item.get("done_via") == "oa" else ("website" if item.get("source") == "website" else ""),
             external_assist=item.get("external_assist") or [])
+
+    def do_text(self, body):
+        from ablesci.papers.pdf_review import export_review
+        item = self.item(body.get("id"))
+        path = self.pdf_path(item)
+        if path is None:
+            raise ValueError("该条目没有已保存的 PDF")
+        result = export_review(path, self.store.root, item["id"], pages=body.get("pages"),
+                               engine=body.get("engine", "pymupdf"), expected_sha256=(item.get("verification") or {}).get("sha256"))
+        return dict(result, id=item["id"])
 
     def do_render(self, body):
         item = self.item(body.get("id"))
@@ -438,7 +486,8 @@ class McpApi:
         links = [dict(url=l.get("url"), source=l.get("source"), version=l.get("version"), license=l.get("license")) for l in res.get("links") or []]
         return dict(doi=doi, status=res["status"], oa_status=res.get("oa_status"), is_oa=res.get("is_oa"), license=res.get("license"),
                     version=res.get("version"), links=links, landing_url=res.get("landing_url"), cached=res.get("cached"),
-                    tried=[str(a)[:120] if not isinstance(a, dict) else {k: str(v)[:80] for k, v in a.items()} for a in (res.get("attempts") or [])[-12:]])
+                    source_oa_status=res.get("source_oa_status"),
+                    tried=[str(a)[:120] if not isinstance(a, dict) else {k: v[:80] if isinstance(v, str) else v for k, v in a.items()} for a in (res.get("attempts") or [])[-12:]])
 
     def do_oa_fetch(self, body):
         doi = doi_value(body.get("doi", ""))

@@ -159,6 +159,21 @@ class Flow(unittest.TestCase):
         self.store.update(iid, done_via="oa", status="checked")
         self.assertEqual("done", intake.public_batches(self.store.snapshot(), "default", {}, 100)[0]["phase"])
 
+    def test_completed_confirmed_request_has_completed_advice(self):
+        iid = self.store.add("Site paper", "10.1234/site", account_id="default", batch_id="B3", source="website",
+                             owned=True, website_status="已完结", request_confirmed=True, request_batch_id="B3")
+        intake.create_batch(self.store, "B3", "default", [iid])
+        self.store.update(iid, oa_check={"status": "not_oa"})
+        intake.next_screening(self.store)
+        batch = intake.public_batches(self.store.snapshot(), "default", {}, 100)[0]
+        self.assertEqual("done", batch["phase"])
+        self.assertEqual(1, batch["counts"]["finished"])
+        self.assertEqual("已完成，无需重复求助", batch["items"][0]["advice"])
+        self.assertFalse(batch["items"][0]["selectable"])
+        self.store.update(iid, website_status="待应助")
+        row = intake.classify(self.store.get(iid))
+        self.assertEqual("已在求助中", row["advice"])
+
     def test_mcp_batch_keeps_status_without_requesting_user_popup(self):
         iid = self.store.add("No OA", "10.1234/nooa", account_id="default", batch_id="MCP")
         intake.create_batch(self.store, "MCP", "default", [iid], origin="mcp")

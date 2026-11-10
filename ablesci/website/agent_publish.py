@@ -259,6 +259,7 @@ class PublishMixin:
 
         over = app_settings.cap_block(prefs, self.store.snapshot().get("account_metrics", {}).get(self.accounts.active_id, {}), reward)
         if over:
+            self.store.update(item_id, spending_wait=dict(kind="daily_cap", points=reward), note=over)
             raise PreconditionError("未提交：" + over)
         page.locator("#Assist-point").fill(str(reward))
         if str(page.locator("#Assist-point").input_value()).strip() != str(reward):
@@ -314,7 +315,7 @@ class PublishMixin:
         check["reward"] = reward
         self.store.update(item_id, source="website", owned=True, assist_url=page.url, status="published", request_reward=reward,
                           publish_action=action("confirmed"), publish_check=dict(check, kind="published", time=now()), publish_blocked=False,
-                          publish_retry=None, note="已发布，等待应助。")
+                          publish_retry=None, spending_wait=None, note="已发布，等待应助。")
         self.store.event("已发布求助，悬赏 %d 积分，等待同步状态。" % reward, item_id=item_id, kind="publish")
         app_settings.record_spend(self.store, self.accounts.active_id, reward)
         if isinstance(points, int) and not isinstance(points, bool):
@@ -349,6 +350,7 @@ class PublishMixin:
             self.publish_stop(item_id, "min_reward_raised", why + "（当前设置的悬赏为 %d 积分）" % reward, dict(check, needed=needed, base=reward), notify_kind="min_bounty")
         over = app_settings.cap_block(prefs, self.store.snapshot().get("account_metrics", {}).get(self.accounts.active_id, {}), needed)
         if over:
+            self.store.update(item_id, spending_wait=dict(kind="daily_cap", points=needed), note=over)
             raise PreconditionError("未提交：" + over)
         button = layer.locator(".layui-layer-btn a", has_text="仍然提交")
         if button.count() != 1:

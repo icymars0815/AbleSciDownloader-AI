@@ -162,8 +162,12 @@ class DecisionMixin:
         auto = bool((getattr(self, "_mcp_scope", None) or {}).get("auto"))   # adopted by the background flow, not a click
         self.store.update(item_id, status="adopted", adopt_action=dict(status="confirmed", time=now(), auto=auto),
                           note="已采纳（文件已核对通过）。" if not auto else (
-                              "已自动采纳（DOI、标题、作者、摘要与书目均吻合）。" if (item.get("verification") or {}).get("status") == "identity_match"
+                              "已自动采纳（本地身份核对：%s）。" % ((item.get("verification") or {}).get("reason") or "身份匹配，详情见核对记录") if (item.get("verification") or {}).get("status") == "identity_match"
                               else "已自动采纳（AI 读取 PDF 后确认 DOI 与标题一致）。" if (item.get("ai_verification") or {}).get("status") == "passed"
-                              else "已自动采纳（本地核对：标题与作者、摘要等书目信息吻合；首页未同时印出 DOI 与标题）。"))
+                              else "已自动采纳（本地核对：标题 %s%%，作者 %s，摘要 %s；首页 DOI %s）。" % (
+                                  (item.get("verification") or {}).get("title_score", "?"),
+                                  ((item.get("verification") or {}).get("bibliography") or {}).get("author_status", "unverified"),
+                                  ((item.get("verification") or {}).get("bibliography") or {}).get("abstract_status", "unverified"),
+                                  "与目标一致" if item.get("doi") in ((item.get("verification") or {}).get("primary_dois") or []) else "未确认")))
         self.store.event("已确认采纳该应助文件。", item_id=item_id, kind="adopt", action="focus")
 

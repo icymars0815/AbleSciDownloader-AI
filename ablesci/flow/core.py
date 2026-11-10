@@ -27,6 +27,11 @@ def normalize(text):
     return re.sub(r"[^\w]+", " ", unicodedata.normalize("NFKC", text).casefold()).strip()
 
 
+def normalize_author(text):
+    text = "".join(c for c in unicodedata.normalize("NFKD", text) if unicodedata.category(c) != "Mn")
+    return re.sub(r"(?<=[a-z])\d+\b", "", normalize(text))
+
+
 def doi_value(text):
     """First DOI in text, lower-case. Trailing . , ; and an unmatched ')' are stripped, balanced parentheses stay
     (10.1016/S0140-6736(20)30183-5 survives; '(doi:10.1000/x)' loses only the closing bracket)."""
@@ -143,7 +148,58 @@ def _abstract_score(ref, texts):
     return best, method, excerpt, heading_found
 
 
-def compare_metadata(front, early_text, expected_doi, metadata):
+def title_evidence(texts, title, detail=False):
+    """Compare contiguous lines in independent PDF reading orders; keep the threshold unchanged."""
+    target = normalize(title)
+    best, order, observed = 0.0, "", ""
+    for name, text in texts:
+        lines = [normalize(line) for line in text.splitlines() if line.strip()][:100]
+        for i in range(len(lines)):
+            for n in range(1, 7):
+                window = " ".join(lines[i:i+n])
+                score = SequenceMatcher(None, target, window, autojunk=False).ratio() if target else 0
+                if score > best:
+                    best, order, observed = score, name, window
+                    if best == 1:
+                        return (best, order, observed) if detail else (best, order)
+    return (best, order, observed) if detail else (best, order)
+
+
+def critical_title_difference(expected, observed):
+    target, seen = normalize(expected), normalize(observed)
+    numbers, observed_numbers = sorted(re.findall(r"\d+", target)), sorted(re.findall(r"\d+", seen))
+    negation, observed_negation = sorted(set(target.split()) & {"not", "without"}), sorted(set(seen.split()) & {"not", "without"})
+    return dict(conflict=bool(numbers and numbers != observed_numbers) or negation != observed_negation,
+                expected_numbers=numbers, observed_numbers=observed_numbers,
+                expected_negation=negation, observed_negation=observed_negation)
+
+
+def document_kind(text):
+    """Only standalone headings near the start indicate a supplement, never a body link to one."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()][:16]
+    heading = re.compile(r"(?:electronic\s+)?(?:supporting\s+information|supplementary\s+(?:information|material[s]?|data)|supplemental\s+(?:information|material[s]?|data))(?:\s+(?:for|to))?\s*[:.：]?", re.I)
+    for n, line in enumerate(lines):
+        if heading.fullmatch(line):
+            # ACS places a standalone "Supporting Information" in its Read Online navigation strip.
+            context = " ".join(lines[max(0, n - 6):n + 2]).lower()
+            if any(label in context for label in ("read online", "metrics & more", "article recommendations")):
+                continue
+            return "supplement"
+    return "unknown"
+
+
+def review_blockers(verification):
+    """Reasons that identity similarity must never override during automatic completion."""
+    v = verification or {}
+    reasons = list(v.get("review_blockers") or [])
+    if is_retracted(v) is True and "retracted" not in reasons:
+        reasons.append("retracted")
+    if v.get("document_kind") == "supplement" and "supplement" not in reasons:
+        reasons.append("supplement")
+    return reasons
+
+
+def compare_metadata(front, early_text, expected_doi, metadata, front_variants=None, title_min=.90):
     """Conservative local string comparisons; missing data are never a mismatch."""
     checks = dict(status="unverified", sources=metadata.get("sources", []),
                   metadata_status=metadata.get("status"), fetched_at=metadata.get("fetched_at", ""),
@@ -154,21 +210,21 @@ def compare_metadata(front, early_text, expected_doi, metadata):
     if metadata.get("status") != "available" or doi_value(metadata.get("doi", "")) != doi_value(expected_doi):
         checks["reason"] = metadata.get("reason", "参考记录 DOI 不一致，作者和摘要未核实")
         return checks
-    lines = [normalize(line) for line in front.splitlines() if line.strip()][:100]
     title = normalize(metadata.get("title", ""))
-    windows = [" ".join(lines[i:i+n]) for i in range(len(lines)) for n in range(1, 7)]
-    score = max((SequenceMatcher(None, title, x).ratio() for x in windows), default=0) if title else 0
+    variants = front_variants or [("sorted", front)]
+    score, order = title_evidence(variants, title)
     checks["title_score"] = round(score * 100, 1)
+    checks["title_text_order"] = order
     if title:
-        checks["title_status"] = "match" if score >= .90 else "difference" if score < .65 else "review"
-    header = re.split(r"(?i)\babstract\b|摘要|\bintroduction\b", front, maxsplit=1)[0][:5000]
-    header_lines = [normalize(line) for line in header.splitlines() if line.strip()]
+        checks["title_status"] = "match" if score >= title_min else "difference" if score < .65 else "review"
+    header = "\n".join(re.split(r"(?i)\babstract\b|摘要|\bintroduction\b", text, maxsplit=1)[0][:5000] for _, text in variants)
+    header_lines = [normalize_author(line) for line in header.splitlines() if line.strip()]
     matched, missing = [], []
     for name in metadata.get("authors", []):
-        tokens = normalize(name).split()
+        tokens = normalize_author(name).split()
         # Require a full name or a surname plus given-name initial on the SAME line.
         found = len(tokens) >= 2 and any(
-            normalize(name) in line or
+            normalize_author(name) in line or
             (tokens[-1] in line.split() and any(t.startswith(tokens[0][0]) and t != tokens[-1] for t in line.split()))
             for line in header_lines)
         (matched if found else missing).append(name)
@@ -194,6 +250,14 @@ def compare_metadata(front, early_text, expected_doi, metadata):
         # No heading and a poor window score is a layout failure: stays "unverified", never "difference".
     if len(ref) < 80:
         checks["abstract_status"] = "unavailable"     # publisher gives no public abstract (common for Elsevier)
+    elif len(ref) < 250:
+        for text in texts:
+            for match in ABSTRACT_HEAD_RE.finditer(text):
+                observed = normalize(ABSTRACT_STOP_RE.split(text[match.end():], maxsplit=1)[0][:14000])
+                if len(observed) > 3 * len(ref) and ref in observed:
+                    checks.update(abstract_status="reference_fragment", abstract_score=None,
+                                  reference_abstract_quality="partial", abstract_partial_match=True)
+                    break
     identity = checks["title_status"] == "match" and checks["author_status"] == "match"
     if all(checks[k] == "match" for k in ("title_status", "author_status", "abstract_status")):
         checks.update(status="match", reason="公开标题、作者名单及摘要均通过本地文字比对")
@@ -205,7 +269,71 @@ def compare_metadata(front, early_text, expected_doi, metadata):
         checks.update(status="difference", reason="公开记录与 PDF 文字疑似存在差异，请人工复核")
     else:
         checks.update(status="unverified", reason="作者或摘要未全部核实；缺失信息不视为错误")
+        if checks["abstract_status"] == "reference_fragment":
+            checks["reason"] = "公开摘要参照仅为片段，该片段吻合；完整摘要尚未核实"
     return checks
+
+
+def verify_text_evidence(chunks, expected_title, expected_doi, metadata=None, sha256=None, pages=0, embedded_doi="", title_min=.90):
+    """Pure identity review of observed page text; never opens a PDF or uses the target as observed evidence."""
+    result = dict(status="review", title_score=0, primary_dois=[], reason="待 AI 复核", pages=pages,
+                  sha256=sha256, embedded_doi=embedded_doi)
+    first = [(c["order"], c["text"]) for c in chunks if c["page"] == 1]
+    if not first:
+        return dict(result, review_blockers=["missing_first_page"], reason="缺少首页文字，需 AI 看原图")
+    if max(len(re.sub(r"\s", "", text)) for _, text in first) < 50:
+        return dict(result, status="ocr_required", reason="首页文字不足，可能是扫描件；需要 OCR 或 AI 看原图")
+    stop = r"(?im)^\s*(?:references|bibliography|参考文献)\s*$"
+    variants = [(order, re.split(stop, text)[0]) for order, text in first]
+    score, order, observed_title = title_evidence(variants, expected_title, detail=True)
+    primary = sorted({doi_value(m.group()) for _, text in variants for m in DOI_RE.finditer(text)})
+    doi = doi_value(expected_doi)
+    front = next((text for name, text in variants if name == "original"), variants[0][1])
+    result.update(title_score=round(score * 100, 1), title_text_order=order, primary_dois=primary,
+                  document_kind=document_kind(front), excerpt=front[:1200])
+    critical = critical_title_difference(expected_title, observed_title)
+    result["title_critical_tokens"] = critical
+    if critical["conflict"]:
+        result["review_blockers"] = ["title_critical_difference"]
+    if doi and doi in primary and score >= title_min:
+        result.update(status="identity_match", reason="首页 DOI 与标题均匹配；完整性和版本仍需核对")
+    elif doi and primary and doi not in primary:
+        result.update(status="conflict", reason="首页检测到其他 DOI，与目标 DOI 不一致；请 AI 复核")
+    elif score < .65 and normalize(expected_title):
+        result.update(status="conflict", reason="首页标题与目标差异较大；请 AI 复核，不自动驳回")
+    elif not doi:
+        result["reason"] = "缺少目标 DOI；仅凭标题不自动确认"
+    else:
+        result["reason"] = "首页未同时满足 DOI 与标题匹配；请 AI 复核"
+    if metadata is not None:
+        orders = list(dict.fromkeys(c["order"] for c in chunks))
+        early = [re.split(stop, "\n".join(c["text"] for c in chunks if c["order"] == name and c["page"] <= 3))[0]
+                 for name in orders]
+        checks = compare_metadata(front, early, expected_doi, metadata, front_variants=variants, title_min=title_min)
+        result["bibliography"] = checks
+        if checks.get("reference_abstract_quality") == "partial":
+            result["reason"] += "；" + checks["reason"]
+        if result["status"] == "identity_match":
+            if checks["status"] == "match":
+                result["reason"] = ("DOI、标题、作者与摘要均匹配" if checks["abstract_status"] == "match" else
+                                    "DOI、标题、作者均匹配（" + checks["reason"].split("；", 1)[-1] + "）") + "；完整性和版本仍需核对"
+            else:
+                result.update(status="review", reason="DOI 和标题初筛匹配；" + checks["reason"])
+        result["retraction"] = metadata.get("retraction") if isinstance(metadata.get("retraction"), dict) else dict(retracted=None, updates=[], source=None)
+        if is_retracted(metadata) is True:
+            if result["status"] == "identity_match":
+                result["status"] = "review"
+            result["reason"] = RETRACTION_REASON + "；" + result["reason"]
+    blockers = review_blockers(result)
+    if blockers:
+        result["review_blockers"] = blockers
+        if result["status"] == "identity_match":
+            result["status"] = "review"
+        if "supplement" in blockers:
+            result["reason"] = "首页标注为补充材料，不能作为正文自动完成；" + result["reason"]
+        if "title_critical_difference" in blockers:
+            result["reason"] = "标题关键数字、编号或否定词不一致，不能凭总相似度放行；" + result["reason"]
+    return result
 
 
 def verify_pdf(path, expected_title, expected_doi, metadata=None):
@@ -227,13 +355,14 @@ def verify_pdf(path, expected_title, expected_doi, metadata=None):
                 return result
             # Never accept a target DOI found only in the reference list.
             front = re.split(r"(?im)^\s*(?:references|bibliography|参考文献)\s*$", first)[0]
-            lines = [normalize(line) for line in front.splitlines() if line.strip()][:100]
             target = normalize(expected_title)
-            windows = [" ".join(lines[i:i+n]) for i in range(len(lines)) for n in range(1, 7)]
-            score = max((SequenceMatcher(None, target, x).ratio() for x in windows), default=0) if target else 0
+            raw_front = re.split(r"(?im)^\s*(?:references|bibliography|参考文献)\s*$", doc[0].get_text(sort=False))[0]
+            variants = [("sorted", front), ("original", raw_front)]
+            score, order = title_evidence(variants, expected_title)
             primary = sorted({doi_value(m.group()) for m in DOI_RE.finditer(front)})
             doi = doi_value(expected_doi)
             result.update(title_score=round(score * 100, 1), primary_dois=primary,
+                          title_text_order=order, document_kind=document_kind(raw_front),
                           excerpt=front[:1200], sha256=hashlib.sha256(Path(path).read_bytes()).hexdigest())
             if doi and doi in primary and score >= .90:
                 result.update(status="identity_match", reason="首页 DOI 与标题均匹配；完整性和版本仍需核对")
@@ -249,7 +378,7 @@ def verify_pdf(path, expected_title, expected_doi, metadata=None):
                 stop = r"(?im)^\s*(?:references|bibliography|参考文献)\s*$"
                 early = [re.split(stop, "\n".join(doc[i].get_text(**kw) for i in range(min(3, doc.page_count))))[0]
                          for kw in ({"sort": True}, {})]
-                checks = compare_metadata(front, early, expected_doi, metadata)
+                checks = compare_metadata(front, early, expected_doi, metadata, front_variants=variants)
                 result["bibliography"] = checks
                 if result["status"] == "identity_match":
                     if checks["status"] == "match":
@@ -263,6 +392,13 @@ def verify_pdf(path, expected_title, expected_doi, metadata=None):
                     result.update(status="review", reason=RETRACTION_REASON)
                 elif is_retracted(metadata) is True:
                     result["reason"] = RETRACTION_REASON + "；" + result["reason"]
+            blockers = review_blockers(result)
+            if blockers:
+                result["review_blockers"] = blockers
+                if result["status"] == "identity_match":
+                    result["status"] = "review"
+                if "supplement" in blockers:
+                    result["reason"] = "首页标注为补充材料，不能作为正文自动完成；" + result["reason"]
     except Exception:
         result.update(status="invalid", reason="PDF 无法完整解析或需要密码；请先重新下载并人工检查")
     return result

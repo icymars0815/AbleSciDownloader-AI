@@ -200,7 +200,7 @@ class CliAgainstRealServer(unittest.TestCase):
                         self.assertEqual(0, kytdl.main(argv + ["--json"], client), argv)
                 item_id = server.store.snapshot()["items"][0]["id"]
                 with contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(1, kytdl.main(["result", item_id, "--json"], client))   # no PDF yet: business result, not an error crash
+                    self.assertEqual(0, kytdl.main(["result", item_id, "--json"], client))   # a successful query of a pending paper
             finally:
                 stop(server)
 

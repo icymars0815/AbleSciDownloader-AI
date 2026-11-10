@@ -118,8 +118,15 @@ def find(doi):
         raise ZoteroUnavailable("Zotero 本地接口未开启（设置 > 高级 > 允许其他应用程序与 Zotero 通信）")
     if code != 200:
         raise ZoteroUnavailable("Zotero 本地接口返回 HTTP %s" % code)
-    rows = json.loads(body or b"[]")
+    try:
+        rows = json.loads(body or b"[]")
+        if not isinstance(rows, list):
+            raise ValueError("invalid response")
+    except (ValueError, TypeError):
+        raise ZoteroUnavailable("Zotero 库存接口返回格式无效，库存尚未核实") from None
     for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not isinstance(row.get("data", {}), dict):
+            raise ZoteroUnavailable("Zotero 库存条目格式无效，库存尚未核实")
         data = row.get("data") or {}
         if data.get("itemType") in ("attachment", "note", "annotation") or _doi_of(data) != doi:
             continue
@@ -136,9 +143,24 @@ def _has_pdf(key, row):
         return False
     code, _, body = _call("/api/users/0/items/%s/children?format=json" % quote(key))
     if code != 200:
-        return False
-    children = json.loads(body or b"[]")
+        raise ZoteroUnavailable("Zotero 附件查询未完成，不能判断是否已有 PDF")
+    try:
+        children = json.loads(body or b"[]")
+        if not isinstance(children, list):
+            raise ValueError("invalid response")
+    except (ValueError, TypeError):
+        raise ZoteroUnavailable("Zotero 附件接口返回格式无效，附件尚未核实") from None
     return any((c.get("data") or {}).get("contentType") == "application/pdf" for c in children if isinstance(c, dict))
+
+
+def readiness(prefs, fresh=False):
+    cfg, health = settings(prefs), status(fresh=fresh)
+    state = "ready" if health["local_api"] else "app_not_connected" if not health["running"] else "local_api_unavailable"
+    prompt = ("Zotero 库存查询已就绪；下载后入库是另一个步骤，只有写入和附件回读成功才算完成。" if state == "ready" else
+              "Zotero 库存尚未核实。请打开 Zotero，并在设置 > 高级启用本地 API；是否先连接后继续，或本次跳过库存查询？")
+    return dict(cfg, **health, state=state, library_scope="personal_library", inventory_read_only=True,
+                save_api="connector", save_verified=False, prompt=prompt,
+                next="kytdl zotero status --json 复查；查询用 kytdl zotero find <DOI> --json。不要把接口不可用当作没有库存。")
 
 
 class FileOffers:

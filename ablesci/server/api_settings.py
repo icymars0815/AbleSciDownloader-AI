@@ -46,6 +46,9 @@ def route_preferences(c, h, body, path, origin):
             if not changes.get("mcp_website_actions"):
                 pipeline.pause_mcp()
             store.event("智能模式已关闭，相关设置已恢复为开启前的值。")
+        pipeline.resume_spending_waits()
+        pipeline.notify_spending_limit()
+        pipeline.kick()
         return h.respond(200, {"ok": True, "smart": app_settings.smart(store.snapshot().get("preferences", {}))})
     if "zotero" in body:
         store.update_preferences(**zotero_bridge.validate(body["zotero"]))

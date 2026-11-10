@@ -183,4 +183,5 @@ def _fetch_metadata(doi, cache_root, email):
 
 def verify_with_metadata(path, title, doi, cache_root, lookup=True, email=""):
     metadata = fetch_metadata(doi, cache_root, email) if lookup else None
-    return verify_pdf(path, title, doi, metadata=metadata)
+    from ablesci.papers.pdf_review import verify_via_markdown
+    return verify_via_markdown(path, title, doi, cache_root, metadata=metadata)

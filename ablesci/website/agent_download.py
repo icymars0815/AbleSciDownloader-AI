@@ -256,6 +256,7 @@ class DownloadMixin:
                     charged = False   # bookkeeping only: a fresh synced balance well above 500 means this click is free
                 over = app_settings.cap_block(preferences, self.store.snapshot().get("account_metrics", {}).get(self.accounts.active_id, {}), 2) if charged else ""
                 if over:
+                    self.store.update(item_id, spending_wait=dict(kind="daily_cap", operation="download", points=2), note=over)
                     raise ValueError("未使用付费高速通道：" + over)
                 self.store.update(item_id, highspeed_paid=list(self.store.get(item_id).get("highspeed_paid") or [])
                                   + [dict(file_id=file_id, time=now(), charged=charged, mode=mode)], highspeed_clicks=clicks + 1)

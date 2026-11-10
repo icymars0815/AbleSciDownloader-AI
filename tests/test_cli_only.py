@@ -168,7 +168,7 @@ class WatchTests(unittest.TestCase):
         self.assertIn("kytdl confirm b --reward", stop["next"])
         done = next(e for e in lines if e.get("status") == "done")
         self.assertEqual("D:/x/a.pdf", done["path"])
-        self.assertEqual("finished", lines[-1]["event"])
+        self.assertEqual("needs_attention", lines[-1]["event"])
         self.assertEqual(["b"], lines[-1]["needs"])
         self.assertEqual(4, code)                                   # a paper needs a decision (not an error)
 

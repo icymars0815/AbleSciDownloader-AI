@@ -70,14 +70,21 @@ kytdl ai on          :: 显示 AI 接管规则；你同意后：kytdl ai on --co
 | `kytdl start` / `kytdl stop` | 启动 / 停止后台服务 |
 | `kytdl status` | 服务、积分，以及需要你处理的事（`needs_user`） |
 | `kytdl get <清单\|DOI\|-> [--no-wait]` | 下载一批文献（等待结果，或立刻返回批次号） |
-| `kytdl watch <批次\|id>` | 实时进展：每有变化输出一行，全部有结果后退出 |
+| `kytdl watch <批次\|id>` | 实时进展：每有变化输出一行，完成、需处理或超时后退出 |
+| `kytdl text <id>` | 导出本地 Markdown 辅助审核，保留页码和原 PDF 哈希 |
+| `kytdl zotero status` / `kytdl zotero find <DOI>` | 查看本地 API 状态、按 DOI 查个人库库存 |
+| `kytdl zotero on --confirmed` | 同意后开启库存查询和核对后自动入库；可用 `--collection` 指定分类 |
 | `kytdl inbox [--ack]` | 后台到达的结果 |
 | `kytdl confirm <批次> [--confirmed]` | 预览 / 确认超出免确认额度的积分 |
 | `kytdl open <id> [--folder]` | 用系统程序打开下载好的 PDF |
 | `kytdl ai [on\|off]` | AI 接管的状态 / 开启 / 关闭 |
 | `kytdl email <地址>` | 可选：给免费全文服务的联系邮箱（多查 Unpaywall 一个来源） |
 
-所有命令加 `--json` 输出机器可读结果；退出码 0 正常，1 需要用户决定或业务错误，2 服务没运行，3 没有权限。
+业务命令加 `--json` 输出机器可读结果；退出码 0 正常（包括结果查询显示仍在进行），1 业务错误，2 服务没运行，3 没有权限，4 需要 AI 审核或用户决定。`kytdl --version` 可离线查看版本。
+
+达到每日花费保护线时，软件通过收件箱、`status` 和 `watch` 明确交给 AI 询问用户；用户同意具体新上限后调整即可自动续办，保留原有逐篇确认设置。待审核时可先用 `kytdl text` 阅读 Markdown，有疑点再用 `kytdl pages` 看原图；转换文本不证明正文、完整性或版本正确。
+
+审核顺序是 PDF → 本地 Markdown → 软件规则 → 有疑点才交给 AI。`validate-md`、`benchmark-md`、`challenge-md` 提供离线转换、配对计时和正负样本测试，详见 AI_GUIDE.md。Markdown 是可复用的证据格式，不能仅凭格式推断审核会更快或更准确。
 
 ## 数据与隐私
 

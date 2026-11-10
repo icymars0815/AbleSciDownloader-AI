@@ -74,7 +74,7 @@ def needs_user(client, st):
     except Exception:
         return out
     for row in reply.get("account") or []:
-        out.append(dict(kind=row.get("kind"), reason=row.get("reason"), next="kytdl login" if "login" in (row.get("kind") or "") or row.get("kind") == "no_session" else row.get("next")))
+        out.append(dict(row, next="kytdl login" if "login" in (row.get("kind") or "") or row.get("kind") == "no_session" else row.get("next")))
     if out and out[0]["kind"] == "ai_takeover_off":
         return out   # `kytdl ai on` covers the remaining setup hints; only login matters before it
     for row in reply.get("setup") or []:
@@ -183,10 +183,16 @@ def cmd_wait(client, args):
 
 def cmd_result(client, args):
     reply = client.post("/api/mcp/result", {"id": args.id})
+    if reply.get("automatic_pending"):
+        return dict(reply, ok=True, pending=True, needs_decision=False), OK
     if reply.get("stage") in ("awaiting_decision", "oa_review"):
         # the file is here but someone (normally the AI) must decide: a decision, not an error (report 2026-11-10)
         return dict(reply, ok=True, needs_decision=True, next="kytdl pages %s --pages 1，再按 kytdl status 的 pending_ai_review 处理" % args.id), NEEDS
-    return dict(reply, ok=reply["has_pdf"]), OK if reply["has_pdf"] else BUSINESS
+    if reply.get("stage") in ("queued", "submitted", "fulfilled", "downloading"):
+        return dict(reply, ok=True, pending=True, next="kytdl watch %s --json" % args.id), OK
+    if reply.get("stage") == "attention":
+        return dict(reply, ok=False, pending=False, error="条目需要处理，请查看 kytdl status", next="kytdl status --json"), BUSINESS
+    return dict(reply, ok=reply["has_pdf"], pending=False), OK if reply["has_pdf"] else BUSINESS
 
 
 def cmd_open(client, args):
@@ -264,7 +270,8 @@ def cmd_ai(client, args):
     if args.mode == "off":
         client.post("/api/preferences", {"smart_mode": {"enabled": False}})
         return dict(ai_view(client.state()), message="AI 接管已关闭，相关设置已恢复为开启前的值"), OK
-    auto = (view["auto_confirm_max"] or AI_DEFAULT_AUTO) if args.auto_max is None else args.auto_max
+    configured = "auto_confirm_max" in ((st.get("preferences") or {}).get("smart_config") or {}) or view["smart_mode"]
+    auto = (view["auto_confirm_max"] if configured else AI_DEFAULT_AUTO) if args.auto_max is None else args.auto_max
     cap = view["daily_cap"] if args.daily_cap is None else args.daily_cap
     rules = AI_RULES.format(auto=auto, cap=cap, reserve=view["reserve"])
     if not args.confirmed:
@@ -315,6 +322,7 @@ def cmd_start(client, args):
 
 def get_row(item, batch, first_decision, now, auto=0):
     """One paper's result for `kytdl get`: (status, done?). auto: the AI-takeover no-ask amount (0 = off)."""
+    from ablesci.flow.core import review_blockers
     stage = item.get("stage") or "queued"
     if stage == "done" or (item.get("adopt_action") or {}).get("status") == "confirmed":
         # an adopted paper is finished even while a later sync briefly reads an unknown site status
@@ -328,6 +336,13 @@ def get_row(item, batch, first_decision, now, auto=0):
         # the answer is on 科研通 but the download stopped: the AI can retry it (real 2026-11-10: it sat as
         # needs_person and nobody had a command to move it)
         return "download_failed", True
+    if (stage == "attention" and item.get("pdf") and item.get("status") in ("checked", "downloaded")
+            and (item.get("publish_check") or {}).get("kind") == "published"
+            and (item.get("verification") or {}).get("status") in ("identity_match", "review")
+            and not review_blockers(item.get("verification"))
+            and not any((item.get(k) or {}).get("status") in ("attempted", "uncertain") for k in ("publish_action", "adopt_action", "reject_action"))
+            and now - first_decision.setdefault(item["id"], now) < DECISION_GRACE):
+        return "adopting", False
     if stage == "attention" or (item.get("oa_check") or {}).get("status") == "needs_human" and not item.get("request_confirmed"):
         return "needs_person", True
     if stage == "awaiting_decision":
@@ -345,7 +360,7 @@ def get_row(item, batch, first_decision, now, auto=0):
 
 NEXT_FOR = {
     "needs_points": "kytdl confirm {batch} 看预览 -> 告诉用户要花多少积分 -> 同意后加 --confirmed",
-    "needs_check": "kytdl pages {id} 看首页图 -> 科研通文件: kytdl verify {id} --doi ... --title ... --confirmed；"
+    "needs_check": "kytdl text {id} --json 读取本地 Markdown，有疑点 kytdl pages {id} 看首页图；先检查 result 的 review_blockers；科研通文件: kytdl verify {id} --doi ... --title-file ... --confirmed（Markdown 证据需 --evidence markdown --sha256 ...）；"
                    "免费全文: AI 自己比对首页的标题/作者，是同一篇就 kytdl resolve {id} keep --confirmed，不是就 request --confirmed",
     "needs_person": "把 note 告诉用户；若是最低悬赏高于已同意金额（site_min_reward），用户同意后 kytdl confirm {id} --reward N --confirmed",
     "download_failed": "kytdl retry {id}（AI 直接重试；同一文件高速费只扣一次）；连续 2 次仍失败再把 note 告诉用户",
@@ -369,6 +384,8 @@ def paper_event(item, status, batch_id):
             ev["site_min_reward"] = check["min_reward"]
     if status in NEXT_FOR:
         ev["next"] = NEXT_FOR[status].format(batch=batch_id or item.get("batch_id") or "<batch>", id=item["id"])
+    if item.get("_spending_request"):
+        ev.update(item["_spending_request"], reason="daily_cap_reached", next=item["_spending_request"]["next"])
     return ev
 
 
@@ -379,8 +396,7 @@ def track(client, target, timeout, emit, interval=3, auto=None):
     start = time.monotonic()
     while True:
         st = client.state()
-        if auto is None:
-            auto = takeover_auto(st)
+        auto_now = takeover_auto(st) if auto is None else auto
         batches = {b["id"]: b for b in st.get("batches") or []}
         if ids is None:
             if target in batches:
@@ -398,11 +414,16 @@ def track(client, target, timeout, emit, interval=3, auto=None):
             if not item:
                 continue
             batch = batches.get(batch_id or item.get("batch_id") or "")
-            status, final = get_row(item, batch, first_decision, now, auto)
+            status, final = get_row(item, batch, first_decision, now, auto_now)
+            from ablesci.flow.settings import daily_cap_task
+            task = daily_cap_task(st.get("preferences") or {}, st.get("account") or {}, [item])
+            if task and task.get("id") == iid:
+                item = dict(item, _spending_request=task)
+                status, final = "needs_points", True
             rows.append((item, status, final))
             # a new note with the same status is news too (real 2026-11-10: "lookup returned empty, retry in 5 min"
             # kept the paper `queued`, so nothing was reported until the user asked)
-            key = (status, item.get("note") or "")
+            key = (status, item.get("note") or "", (task or {}).get("key"))
             if last.get(iid) != key:
                 last[iid] = key
                 emit(paper_event(item, status, batch_id))
@@ -451,12 +472,14 @@ def cmd_watch(client, args):
     for _, status, _ in rows:
         counts[status] = counts.get(status, 0) + 1
     need = [item["id"] for item, status, _ in rows if status not in FINAL_OK]
-    out = dict(event="finished" if finished else "timeout", target=args.id, counts=counts,
-               all_done=all(status in FINAL_OK for _, status, _ in rows))
+    all_done = bool(rows) and all(status in FINAL_OK for _, status, _ in rows)
+    out = dict(event="finished" if all_done else "needs_attention" if finished else "timeout", target=args.id, counts=counts,
+               all_done=all_done)
     if not finished:
         out["next"] = "仍在进行，可再次运行 kytdl watch %s" % args.id
     elif need:
         out["needs"] = need
+        out["next"] = "按每条 paper 事件中的 next 处理；需要用户确认时立即询问，确认后重新运行 kytdl watch %s --json" % args.id
     return out, OK if out["all_done"] else NEEDS if finished else BUSINESS
 
 
@@ -490,15 +513,19 @@ def cmd_get(client, args):
         if status == "done":
             result = client.post("/api/mcp/result", {"id": item["id"]})
             row.update(path=result.get("local_path", ""), verification=(result.get("verification") or {}).get("status"))
+        if item.get("_spending_request"):
+            row.update(item["_spending_request"], reason="daily_cap_reached")
         out.append(row)
     need = [r for r in out if r["status"] in ("needs_points", "needs_check", "needs_person", "download_failed")]
     hints = []
     if any(r["status"] == "download_failed" for r in out):
         hints.append("download_failed：已有人应助但下载中断，运行 kytdl retry <id> 重试；连续 2 次仍失败再告诉用户")
-    if any(r["status"] == "needs_points" for r in out):
+    if any(r.get("reason") == "daily_cap_reached" for r in out):
+        hints.append("daily_cap_reached：立即向用户询问各行 prompt；同意具体新上限后运行 confirmation_command，再继续 watch")
+    if any(r["status"] == "needs_points" and r.get("reason") != "daily_cap_reached" for r in out):
         hints.append("needs_points：先运行 kytdl confirm %s 看预览，告诉用户要花多少积分；同意后加 --confirmed" % batch_id)
     if any(r["status"] == "needs_check" for r in out):
-        hints.append("needs_check：kytdl pages <id> 看首页图，读出 DOI 与标题。科研通文件用 kytdl verify <id> --doi ... --title ... --confirmed；"
+        hints.append("needs_check：kytdl text <id> --json 读取本地 Markdown，有疑点 kytdl pages <id> 看首页图。先检查 review_blockers；科研通文件用 kytdl verify <id> --doi ... --title-file ... --confirmed（Markdown 证据需 --evidence markdown --sha256 ...）；"
                      "免费全文文件由 AI 比对首页标题/作者：同一篇 kytdl resolve <id> keep --confirmed，不是 request --confirmed（改走科研通）")
     if any(r["status"] in ("waiting_answer", "downloading", "adopting", "screening", "publishing", "requesting") for r in out):
         hints.append("仍在进行的条目会在后台继续；结果出来后用 kytdl inbox 查看并告诉用户")
@@ -570,7 +597,9 @@ def read_title(args):
 
 def cmd_verify(client, args):
     pages = [int(p) for p in (args.pages or "1").split(",") if p.strip()]
-    reply = client.post("/api/mcp/ai-verify", {"id": args.id, "doi": args.doi, "title": read_title(args), "pages": pages, "confirmed": args.confirmed})
+    reply = client.post("/api/mcp/ai-verify", {"id": args.id, "doi": args.doi, "title": read_title(args), "pages": pages,
+                                             "confirmed": args.confirmed, "evidence": args.evidence, "sha256": args.sha256,
+                                             "document_version": args.document_version})
     if reply.get("passed"):
         reply = dict(reply, next="后台会自动采纳；kytdl wait %s --until done 或稍后 kytdl inbox" % args.id)
     return dict(reply, ok=reply.get("passed", False)), OK if reply.get("passed") else BUSINESS
@@ -581,6 +610,46 @@ def cmd_pages(client, args):
     pages = [int(p) for p in (args.pages or "1").split(",") if p.strip()]
     reply = client.post("/api/mcp/render", {"id": args.id, "pages": pages})
     return dict(ok=True, id=reply["id"], images=[dict(page=p["page"], path=p["path"]) for p in reply["pages"]]), OK
+
+
+def cmd_text(client, args):
+    pages = [int(p.strip()) for p in args.pages.split(",") if p.strip()] if args.pages else None
+    return client.post("/api/mcp/text", dict(id=args.id, pages=pages, engine=args.engine)), OK
+
+
+def cmd_validate_md(client, args):
+    from ablesci.papers.md_validation import validate_batch
+    result = validate_batch(args.folder, args.references, args.output, engine=args.engine, baseline=args.baseline)
+    return result, OK if result["ok"] else BUSINESS
+
+
+def cmd_benchmark_md(client, args):
+    from ablesci.papers.md_benchmark import benchmark
+    result = benchmark(args.folder, args.references, args.output, args.runs)
+    return result, OK if result["ok"] else BUSINESS
+
+
+def cmd_challenge_md(client, args):
+    from ablesci.papers.md_challenges import challenge
+    return challenge(args.output), OK
+
+
+def cmd_zotero(client, args):
+    if args.mode in ("on", "off"):
+        rules = ("开启 Zotero 联动：下载前查询本地个人库，下载核对通过后自动入库；需要 Zotero 打开及对应 API 可用。" if args.mode == "on" else
+                 "关闭 Zotero 联动：不再查询库存或自动入库，已有文献保持不变。")
+        if not args.confirmed:
+            return dict(ok=False, rules=rules, next="向用户说明查询和入库两个作用，用户同意后加 --confirmed"), BUSINESS
+        body = dict(enabled=args.mode == "on", confirmed=True)
+        if args.mode == "on":
+            body.update(check=True, save=True)
+        if args.collection is not None:
+            body["collection"] = args.collection
+        return client.post("/api/mcp/zotero-settings", body), OK
+    if args.mode == "find" and not args.doi:
+        raise ValueError("请指定要查询的 DOI")
+    result = client.post("/api/mcp/zotero-find" if args.mode == "find" else "/api/mcp/zotero-status", {"doi": args.doi} if args.mode == "find" else {})
+    return result, OK if result.get("ok") else BUSINESS
 
 
 def cmd_login(client, args):
@@ -626,6 +695,8 @@ def parser():
     common.add_argument("--json", action="store_true", help="machine-readable output")
     p = argparse.ArgumentParser(prog="kytdl", description="Local 科研通 literature helper CLI. Never changes 科研通 state itself; "
                                 "`ai on --confirmed` lets the app's background flow spend points within the shown limits.")
+    from ablesci.server.app_info import APP_VERSION
+    p.add_argument("--version", action="version", version="kytdl " + APP_VERSION)
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("status", parents=[common]).set_defaults(run=cmd_status)
     s = sub.add_parser("import", parents=[common], help="import references (file or - for stdin); starts free-source screening only")
@@ -701,12 +772,42 @@ def parser():
     s.add_argument("--title", help="the title as read on the PDF")
     s.add_argument("--title-file", help="read the title from a UTF-8 file, or - for stdin (safer under cmd.exe)")
     s.add_argument("--pages", default="1", help="pages you looked at, e.g. 1,2")
-    s.add_argument("--confirmed", action="store_true", help="you really looked at the PDF")
+    s.add_argument("--evidence", choices=("pages", "markdown"), default="pages", help="original page images, or local kytdl text evidence")
+    s.add_argument("--sha256", help="required with --evidence markdown: hash from kytdl text")
+    s.add_argument("--document-version", choices=("acceptedVersion", "submittedVersion"), help="AI reviewed a manuscript's version and will disclose it; does not override a different DOI")
+    s.add_argument("--confirmed", action="store_true", help="you really read the PDF or its local Markdown evidence")
     s.set_defaults(run=cmd_verify)
     s = sub.add_parser("pages", parents=[common], help="render PDF pages to PNG files (look at them before kytdl verify)")
     s.add_argument("id")
     s.add_argument("--pages", default="1", help="e.g. 1,2 (first 3 pages at most)")
     s.set_defaults(run=cmd_pages)
+    s = sub.add_parser("text", parents=[common], help="export local PDF review Markdown with page numbers and hash; no upload or model download")
+    s.add_argument("id")
+    s.add_argument("--pages", default=None, help="first three pages by default, e.g. 1,2")
+    s.add_argument("--engine", choices=("pymupdf", "pymupdf4llm"), default="pymupdf")
+    s.set_defaults(run=cmd_text)
+    s = sub.add_parser("validate-md", parents=[common], help="offline PDF folder -> full Markdown -> software review -> AI backlog; no website actions")
+    s.add_argument("folder")
+    s.add_argument("--references", required=True, help="independently prepared JSON records: file, doi, title, metadata")
+    s.add_argument("--output", required=True, help="new output folder outside the source folder")
+    s.add_argument("--baseline", help="optional frozen direct-PDF baseline JSON, used only for comparison")
+    s.add_argument("--engine", choices=("pymupdf", "pymupdf4llm"), default="pymupdf")
+    s.set_defaults(run=cmd_validate_md)
+    s = sub.add_parser("benchmark-md", parents=[common], help="paired offline timing: direct PDF, conversion plus Markdown audit, cached Markdown audit")
+    s.add_argument("folder")
+    s.add_argument("--references", required=True)
+    s.add_argument("--output", required=True)
+    s.add_argument("--runs", type=int, default=3)
+    s.set_defaults(run=cmd_benchmark_md)
+    s = sub.add_parser("challenge-md", parents=[common], help="fictional labelled positive/negative cases and title-threshold sweep; offline only")
+    s.add_argument("--output", required=True)
+    s.set_defaults(run=cmd_challenge_md)
+    s = sub.add_parser("zotero", parents=[common], help="local inventory status/find, or explicitly confirmed integration settings; on enables both lookup and post-download save")
+    s.add_argument("mode", nargs="?", choices=("status", "find", "on", "off"), default="status")
+    s.add_argument("doi", nargs="?")
+    s.add_argument("--collection", help="existing collection for post-download save; unchanged if omitted")
+    s.add_argument("--confirmed", action="store_true", help="user agreed to the lookup and save settings")
+    s.set_defaults(run=cmd_zotero)
     s = sub.add_parser("resolve", parents=[common], help="free full-text file under review: keep it, or request it on 科研通 instead")
     s.add_argument("id")
     s.add_argument("decision", choices=("keep", "request"))
