@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from ablesci.website.accounts import Accounts
 from ablesci.server.app import make_server
@@ -428,7 +428,7 @@ class ArchiveAndActionTests(AgentHarness, unittest.TestCase):
         self.store.add("Answer", "", source="website", account_id="default", owned=True, assist_url=URL + "z", website_status=FULFILLED[0])
         item_id = self.store.add("New", "10.1234/new", account_id="default", metadata_ref=dict(title="New"))
         self.body.inner_text.return_value = "当前拥有 120 积分"
-        with self.assertRaises(ValueError):
+        with patch.object(self.agent, "require_verified_reference", return_value="New"), self.assertRaises(ValueError):
             self.agent.publish(item_id)   # page shows <500 so the gate closes before any click
         self.assertEqual(120, self.store.snapshot()["account_metrics"]["default"]["points"])
         self.assertIsNone(self.store.get(item_id).get("publish_action"))

@@ -69,6 +69,7 @@ kytdl ai on          :: 显示 AI 接管规则；你同意后：kytdl ai on --co
 | `kytdl doctor` | 检查安装（Python、依赖、浏览器、数据目录） |
 | `kytdl start` / `kytdl stop` | 启动 / 停止后台服务 |
 | `kytdl status` | 服务、积分，以及需要你处理的事（`needs_user`） |
+| `kytdl check <DOI或条目ID> [--title-file <原始标题文件>]` | 只读 Crossref/PubMed 筛查，不填表、不花积分 |
 | `kytdl get <清单\|DOI\|-> [--no-wait]` | 下载一批文献（等待结果，或立刻返回批次号） |
 | `kytdl watch <批次\|id>` | 实时进展：每有变化输出一行，完成、需处理或超时后退出 |
 | `kytdl text <id>` | 导出本地 Markdown 辅助审核，保留页码和原 PDF 哈希 |
@@ -85,6 +86,8 @@ kytdl ai on          :: 显示 AI 接管规则；你同意后：kytdl ai on --co
 达到每日花费保护线时，软件通过收件箱、`status` 和 `watch` 明确交给 AI 询问用户；用户同意具体新上限后调整即可自动续办，保留原有逐篇确认设置。待审核时可先用 `kytdl text` 阅读 Markdown，有疑点再用 `kytdl pages` 看原图；转换文本不证明正文、完整性或版本正确。
 
 审核顺序是 PDF → 本地 Markdown → 软件规则 → 有疑点才交给 AI。`validate-md`、`benchmark-md`、`challenge-md` 提供离线转换、配对计时和正负样本测试，详见 AI_GUIDE.md。Markdown 是可复用的证据格式，不能仅凭格式推断审核会更快或更准确。
+
+发布科研通求助前还会强制调用 Crossref/PubMed，独立核实原始 DOI、标题及提供过的作者，防止 AI 错配或编造引用。科研通未收录时保留“再次核实存在后按权威信息填表”的兜底，支持 DOI 书籍及章节；接口故障或未命中不等于文献不存在，也不会绕过积分授权。
 
 ## 数据与隐私
 

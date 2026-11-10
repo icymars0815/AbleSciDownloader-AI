@@ -32,7 +32,8 @@ def route_import(c, h, body, path, origin):
     batch_id = intake.new_batch_id()
     for record in records:
         store.add(record["title"], record["doi"], account_id=accounts.active_id, authors=record["authors"], import_format=record["format"],
-                  batch_id=batch_id, request_confirmed=False)
+                  batch_id=batch_id, request_confirmed=False,
+                  submitted_reference=dict(title=record["title"], doi=record["doi"], authors=list(record["authors"])))
     new_ids = [i["id"] for i in store.snapshot()["items"] if i.get("batch_id") == batch_id]
     count = len(new_ids)
     if new_ids:

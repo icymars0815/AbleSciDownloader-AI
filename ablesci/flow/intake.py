@@ -138,6 +138,8 @@ def classify(item, screened_done=True):
     def done(code, result, advice, checked=False, selectable=False):
         row.update(code=code, result=result, advice=advice, checked=checked, selectable=selectable)
         return row
+    if (item.get("publish_check") or {}).get("kind") == "unverified_reference":
+        return done("reference_review", "原始引用尚未通过独立书目核实", item.get("note") or "核对 DOI、标题和作者，暂不发布")
     if item.get("request_confirmed") is True:
         if stage == "done":
             return done("confirmed", "已确认的求助已完成", "已完成，无需重复求助")

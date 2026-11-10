@@ -257,6 +257,22 @@ class McpApi:
     def do_zotero_status(self, body):
         return dict(ok=True, **zotero_bridge.readiness(self.store.snapshot().get("preferences", {}), fresh=True))
 
+    def do_reference_check(self, body):
+        """Read-only primary-source check. Does not import, confirm, fill a site form or spend points."""
+        from ablesci.website import reference_check
+        if body.get("id"):
+            item = self.item(body["id"])
+        else:
+            if not isinstance(body.get("doi"), str) or not doi_value(body["doi"]):
+                raise ValueError("请指定条目 ID 或有效 DOI")
+            if body.get("title") is not None and not isinstance(body["title"], str):
+                raise ValueError("标题须为文本")
+            item = dict(doi=body["doi"], title=(body.get("title") or "")[:2000])
+        result = reference_check.verify_item(item)
+        return dict(ok=result["verified"], doi=item.get("doi"), **result,
+                    next="可继续获取全文；正式发布前服务仍会独立重查，书目核实不等于已授权花分。" if result["verified"] else
+                         "保留原始引用，核对 DOI/标题/作者；API 故障稍后重试，未核实不等于不存在。无 DOI 的书籍需查出版社或目录后人工求助。")
+
     def do_zotero_find(self, body):
         doi = doi_value(str(body.get("doi") or ""))
         if not doi:
@@ -403,6 +419,7 @@ class McpApi:
         return dict(
             id=item["id"], title=item.get("title", ""), doi=item.get("doi", ""), stage=stage, has_pdf=path is not None,
             automatic_pending=automatic_pending,
+            reference_check=item.get("reference_check"),
             acquisition=acquisition_state(item, gate(mine, self.points(), item.get("request_reward"))),
             local_path=str(path) if path else "", original_filename=item.get("original_filename", ""), local_filename=item.get("local_filename", "") or (path.name if path else ""),
             size_bytes=path.stat().st_size if path else 0,

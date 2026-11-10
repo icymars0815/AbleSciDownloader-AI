@@ -249,10 +249,16 @@ def parse_raise(text):
 
 
 def lookup_undefined(scraped):
-    """The 智能提取 layer rendered without data (every field 'undefined', real page 2026-11-02): a transient site-side
-    failure, not a mismatch. Never submitted; the publish is retried later instead of stopping for good."""
+    """Empty rendered lookup: independent primary-source verification may permit manual form filling."""
     text = str((scraped or {}).get("text") or "")
     if "undefined" not in text.lower():
         return False
     title = str(scraped.get("title") or "").strip().lower()
     return not scraped.get("doi") and title in ("", "undefined", "null")
+
+
+def lookup_missing(text):
+    """An explicit missing bibliographic record, distinct from a timeout, query error or account restriction."""
+    return bool(re.search(r"(?:未找到|未查到|未查询到|未检索到|没有找到|未收录|查无).{0,24}(?:doi|文献|记录|数据|结果)|"
+                          r"(?:doi|文献|记录|数据|结果).{0,24}(?:未找到|未查到|未检索到|不存在|未收录)|"
+                          r"^\s*(?:未找到|未查到|未检索到|没有找到)\s*[。！!]?\s*$", str(text or ""), re.I))

@@ -48,13 +48,12 @@ class PublishMixin:
         # Compare with the title as the list cited it. A title that was itself looked up from this DOI would make the check
         # circular (a real DOI attached to an invented citation would pass), so then only the DOI's existence is confirmed.
         item = self.store.get(item_id) or {}
-        cited = (item.get("cited_text") or ("" if item.get("title_from_metadata") else item.get("title") or "")).strip()
-        result = reference_check.verify(doi, cited or ref_title)
-        check["reference_check"] = dict(verified=result["verified"], sources=result["sources"], problems=result["problems"][:6],
-                                        against="cited title" if cited else "DOI only (the list gave no title)")
+        result = reference_check.verify_item(item)
+        check["reference_check"] = result
+        self.store.update(item_id, reference_check=result)
         if not result["verified"]:
             self.publish_stop(item_id, "unverified_reference",
-                              "科研通识别不出该 DOI，Crossref / PubMed 也无法确认这篇文献（%s）。可能是 DOI 写错或文献不存在（例如 AI 编造），未提交。请核对引用"
+                              "科研通识别不出该 DOI，Crossref / PubMed 尚无法确认这条引用（%s）。未提交；未核实不等于不存在，请核对引用或稍后重新核查"
                               % "；".join(result["problems"][:3]), check)
         values = reference_check.form_values(result["record"])
         check.update(filled_from="、".join(result["sources"]), form_values=values)
@@ -64,8 +63,13 @@ class PublishMixin:
             manual.first.click()
         else:
             close = layer.locator(".layui-layer-close")
-            if close.count():
+            if close.count() == 1:
                 close.first.click()
+            else:
+                ack = layer.locator(".layui-layer-btn a").filter(has_text=re.compile(r"^\s*(?:确定|知道了|关闭|返回修改)\s*$"))
+                if ack.count() != 1:
+                    self.publish_stop(item_id, "lookup_confirm", "未找到关闭空识别结果的唯一入口，未填写或提交", check)
+                ack.first.click()
         page.wait_for_timeout(500)
         for selector, value in (("#Assist-doi", values["doi"]), ("#Assist-title", values["title"]), ("#Assist-url", values["url"])):
             page.locator(selector).fill(value)
@@ -80,9 +84,10 @@ class PublishMixin:
             chosen = None
         if chosen != values["type_value"]:
             self.publish_stop(item_id, "form_mismatch", "未能在表单中选中文献类型“%s”，未提交" % values["type_label"], dict(check, form_type=chosen))
-        how = "DOI 与清单中的标题一致" if cited else "DOI 存在（清单只给了 DOI，无法比对引用标题）"
+        how = "DOI 与清单中的标题一致" if result.get("against") == "cited title" else "DOI 存在（清单只给了 DOI，无法比对引用标题）"
         self.store.event("科研通识别不出该 DOI；已用 %s 核实：%s（%s），按核实的信息填写表单。" % (check["filled_from"], how, values["type_label"]),
                          item_id=item_id, kind="publish")
+        return values
 
     def reference_title(self, item, doi, email):
         """The public (OpenAlex/Crossref) title this item is compared against; '' when none can be had."""
@@ -98,6 +103,14 @@ class PublishMixin:
             pass
         return ""
 
+    def require_verified_reference(self, item, check):
+        result = reference_check.verify_item(item)
+        self.store.update(item["id"], reference_check=result)
+        check["reference_check"] = result
+        if not result["verified"]:
+            self.publish_stop(item["id"], "unverified_reference", "Crossref / PubMed 无法确认原始引用（%s），未打开科研通发布页、未提交。核实失败不等于文献不存在，请检查 DOI、标题、作者或稍后重试。" % "；".join(result["problems"][:3]), check)
+        return result["record"]["title"]
+
     def wait_lookup_layer(self, item_id, check):
         """Wait (<= 50 s) for the 智能提取 result layer; known failure wording stops immediately."""
         deadline = time.monotonic() + 50
@@ -106,6 +119,8 @@ class PublishMixin:
                 failure = pp.classify_failure(text)
                 if failure:
                     self.publish_stop(item_id, failure["kind"], failure["message"], dict(check, layer_text=text[:500]), pause=failure["pause"])
+                if pp.lookup_missing(text):
+                    return layer, text
                 # Title queries show 相似度; an exact DOI query shows only 标题/DOI/期刊/作者 + three buttons (real page, 2026-10-20).
                 if "相似度" in text or ("DOI" in text and "标题" in text and "信息正确" in text):
                     return layer, text
@@ -137,14 +152,11 @@ class PublishMixin:
         if stage_of(item) != "queued" or item.get("publish_action"):
             raise PreconditionError("仅可发布尚未发布、未尝试过的本地求助")
         prefs = self.store.snapshot().get("preferences", {})
-        email = prefs.get("oa_contact_email", "")
         doi = doi_value(item.get("doi", ""))
         check = dict(expected_doi=doi, item_title=item.get("title", ""))
         if not doi:
             self.publish_stop(item_id, "no_doi", "无 DOI 的文献不支持自动求助（科研通的智能提取需要 DOI）。请补充 DOI，或在科研通页面自行求助。", check)
-        ref_title = self.reference_title(item, doi, email)
-        check["reference_title"] = ref_title
-        block = pp.auto_publish_block([item.get("title", ""), ref_title], doi)
+        block = pp.auto_publish_block([item.get("title", "")], doi)
         if block:
             self.publish_stop(item_id, "not_auto", block, check)
 
@@ -158,6 +170,11 @@ class PublishMixin:
                 raise PreconditionError(blocked["reason"])
             return stored
         stored_before = recheck()
+        ref_title = self.require_verified_reference(item, check)
+        check["reference_title"] = ref_title
+        block = pp.auto_publish_block([ref_title], doi)
+        if block:
+            self.publish_stop(item_id, "not_auto", block, check)
         self.goto("/assist/create", interactive=False)
         try:
             points = self.read_points()
@@ -198,10 +215,11 @@ class PublishMixin:
                              % (scraped["min_reward"], min(seen[-5:])), kind="needs_action", item_id=item_id)
             check["min_reward_jump"] = True
 
-        if pp.lookup_undefined(scraped):
+        if pp.lookup_undefined(scraped) or pp.lookup_missing(text):
             # 科研通 did not recognise the DOI (user rule, 2026-11-10): no blind retries, and never a request for a
             # reference nobody can confirm. Crossref / PubMed must confirm DOI + title; that record then fills the form.
-            self.fill_form_from_verified(item_id, layer, doi, ref_title, check)
+            values = self.fill_form_from_verified(item_id, layer, doi, ref_title, check)
+            ref_title = values["title"]
             scraped.update(doi=doi, type=None, min_reward=None, similarity=None)
         else:
             # 2) 二次核对：DOI 精确一致、标题与公开记录 >= 0.90、相似度 >= 50（任何文献类型都可以；费用由最低悬赏规则把关）

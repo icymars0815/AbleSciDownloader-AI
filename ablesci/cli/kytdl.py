@@ -139,6 +139,17 @@ def cmd_search(client, args):
     return dict(ok=True, **reply), OK
 
 
+def cmd_check(client, args):
+    from ablesci.flow.core import doi_value
+    body = {"doi": doi_value(args.target)} if doi_value(args.target) else {"id": args.target}
+    if args.title_file:
+        if "id" in body:
+            raise ValueError("核对已有条目时使用保存的原始引用；--title-file 仅用于独立 DOI 查询")
+        body["title"] = " ".join((sys.stdin.read() if args.title_file == "-" else Path(args.title_file).read_text("utf-8-sig")).split())
+    result = client.post("/api/mcp/reference-check", body, timeout=60)
+    return result, OK if result.get("verified") else NEEDS
+
+
 def cmd_oa(client, args):
     if args.download:
         reply = client.post("/api/mcp/oa-fetch", {"doi": args.doi})
@@ -699,6 +710,10 @@ def parser():
     p.add_argument("--version", action="version", version="kytdl " + APP_VERSION)
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("status", parents=[common]).set_defaults(run=cmd_status)
+    s = sub.add_parser("check", parents=[common], help="read-only Crossref/PubMed existence and original citation check; never spends points")
+    s.add_argument("target", help="item ID or DOI")
+    s.add_argument("--title-file", help="original cited title for a standalone DOI; - reads stdin")
+    s.set_defaults(run=cmd_check)
     s = sub.add_parser("import", parents=[common], help="import references (file or - for stdin); starts free-source screening only")
     s.add_argument("source")
     s.set_defaults(run=cmd_import)

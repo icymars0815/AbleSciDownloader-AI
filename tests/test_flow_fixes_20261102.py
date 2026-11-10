@@ -126,7 +126,8 @@ class UndefinedLookupTests(PublishBase):
         self.undefined()
         with patch("ablesci.website.reference_check.verify", return_value=self.verified()) as verify:
             self.run_publish(doi_only)
-        self.assertEqual(TITLE, verify.call_args.args[1])
+        self.assertEqual("", verify.call_args.args[1])
+        self.assertTrue(verify.call_args.kwargs["allow_doi_only"])
         self.assertIn("DOI only", self.store.get(doi_only)["publish_check"]["reference_check"]["against"])
 
     def test_success_after_an_old_retry_clears_the_retry(self):

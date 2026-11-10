@@ -297,6 +297,7 @@ def lookup_text(title=TITLE, doi=DOI, sim=95, kind="期刊论文", minimum=10):
 
 class PublishBase(unittest.TestCase):
     prefs = {}
+    mock_reference_gate = True
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -313,6 +314,9 @@ class PublishBase(unittest.TestCase):
         self.agent.notifier = MagicMock()
         self.store.update_account(account_id="default", points=100)
         self.store.update_preferences(**self.prefs)
+        if self.mock_reference_gate:
+            # Older site-form unit tests assume a valid independent reference. Gate tests opt out and mock only APIs.
+            self.agent.require_verified_reference = MagicMock(side_effect=lambda item, check: self.agent.reference_title(item, item["doi"], ""))
 
     def item(self, title=TITLE, doi=DOI, **fields):
         fields.setdefault("metadata_ref", dict(title=TITLE))
