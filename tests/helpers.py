@@ -242,7 +242,7 @@ class Loc:
 class FakePage:
     def __init__(self, body="您当前有 100 积分"):
         self.url = BASE + "/assist/create"
-        self.el = {s: El() for s in ("#onekey", "#Assist-doi", "#Assist-title", "#Assist-point", "#Assist-close_at", "input")}
+        self.el = {s: El() for s in ("#onekey", "#Assist-doi", "#Assist-title", "#Assist-url", "#Assist-note", "#Assist-point", "#Assist-close_at", "input")}
         self.el["body"] = El(body)
         self.el["#Assist-close_at"].value = "5天"
         self.layers = []

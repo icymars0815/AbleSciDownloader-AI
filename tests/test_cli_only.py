@@ -172,6 +172,18 @@ class WatchTests(unittest.TestCase):
         self.assertEqual(["b"], lines[-1]["needs"])
         self.assertEqual(1, code)                                   # something needs the person
 
+    def test_a_new_note_without_a_status_change_is_reported(self):
+        def snap(note):
+            data = self.snap("done", "queued")
+            data["items"][1]["note"] = note
+            return data
+        client = self.SteppingClient([snap(""), snap("lookup returned empty, retry in 5 minutes"), self.snap("done", "done")])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), unittest.mock.patch("time.sleep"):
+            kytdl.main(["watch", "b1", "--json"], client)
+        notes = [e.get("note") for e in map(json.loads, out.getvalue().splitlines()) if e.get("id") == "b"]
+        self.assertIn("lookup returned empty, retry in 5 minutes", notes)
+
     def test_get_no_wait_returns_the_batch_at_once(self):
         client = self.SteppingClient([self.snap("queued", "queued")])
         out = io.StringIO()

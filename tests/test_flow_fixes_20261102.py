@@ -55,38 +55,146 @@ class Code2MinimumRaiseTests(PublishBase):
 
 
 class UndefinedLookupTests(PublishBase):
-    """Issue 3: an all-'undefined' lookup layer is never submitted, and is retried instead of stopping for good."""
+    """科研通's DOI lookup comes back empty ('undefined'). User rule 2026-11-10: no blind retries; Crossref / PubMed must
+    confirm the reference (DOI + title) before anything is posted, then the confirmed record fills the form."""
 
-    def undefined(self):
-        layer = El(UNDEFINED_LAYER, buttons=[El("信息正确，还需修改")])
+    CHAPTER = dict(source="Crossref", doi=DOI, title=TITLE, kind="book-chapter", container="Handbook of Fictional Health",
+                   publisher="Springer", year=2020, authors=["A. Author", "B. Author"])
+
+    def undefined(self, low_after_type="10"):
+        manual = El("信息有误，手动填写")
+        layer = El(UNDEFINED_LAYER, buttons=[El("信息正确，还需修改"), manual])
         self.page.search.on_click = lambda: self.page.layers.append(layer)
+        self.page.el['input[name="Assist[type]"]:checked'].value = "1"
 
-    def test_retries_then_stops_after_last_attempt(self):
+        def choose(value):
+            def click():
+                self.page.el['input[name="Assist[type]"]:checked'].value = value
+                self.page.el["#point-low"].text = low_after_type
+            return click
+        for value in ("1", "2", "3", "4", "0"):
+            self.page.el['input[name="Assist[type]"][value="%s"] + div' % value] = El(on_click=choose(value))
+        self.page.response, self.page.nav = dict(code=0), DETAIL
+        return manual
+
+    def verified(self, record=None):
+        return dict(verified=True, sources=["Crossref"], record=dict(record or self.CHAPTER), problems=[])
+
+    def test_unconfirmed_reference_is_never_posted_and_not_retried(self):
         item_id = self.item()
-        for count, minutes in enumerate(pp_minutes(), start=1):
-            self.page.layers = []
-            self.undefined()
-            self.assertIn("自动重试", self.run_publish(item_id))
-            after = self.store.get(item_id)
-            self.assertEqual(("queued", "ready", count), (stage_of(after), after["status"], after["publish_retry"]["count"]))
-            self.assertFalse(after.get("publish_blocked"))
-            self.assertGreater(datetime.fromisoformat(after["publish_retry"]["next_at"]), datetime.now().astimezone() + timedelta(minutes=minutes - 1))
-        self.page.layers = []
         self.undefined()
-        self.assertIn("undefined", self.run_publish(item_id))
-        self.assertStopped(item_id, "lookup_undefined")
+        not_found = dict(verified=False, sources=[], record=None, problems=["Crossref 查不到该 DOI", "PubMed 查不到该 DOI"])
+        with patch("ablesci.website.reference_check.verify", return_value=not_found):
+            self.assertIn("无法确认", self.run_publish(item_id))
+        self.assertStopped(item_id, "unverified_reference")
         self.assertEqual(0, self.page.submit.clicks)
+        self.assertIsNone(self.store.get(item_id).get("publish_retry"))
 
-    def test_success_after_retry_clears_the_retry(self):
+    def test_confirmed_chapter_fills_the_form_and_posts_within_the_agreed_amount(self):
+        item_id = self.item()
+        manual = self.undefined(low_after_type="10")
+        with patch("ablesci.website.reference_check.verify", return_value=self.verified()):
+            self.assertIsNone(self.run_publish(item_id))
+        self.assertEqual(1, manual.clicks)                                  # closed the empty popup the site's own way
+        el = self.page.el
+        self.assertEqual((DOI, TITLE, "https://doi.org/" + DOI), (el["#Assist-doi"].value, el["#Assist-title"].value, el["#Assist-url"].value))
+        self.assertIn("Handbook of Fictional Health", el["#Assist-note"].value)
+        after = self.store.get(item_id)
+        self.assertEqual("confirmed", after["publish_action"]["status"])
+        self.assertEqual("4", after["publish_check"]["form_type"])
+        self.assertEqual(["Crossref"], after["publish_check"]["reference_check"]["sources"])
+
+    def test_confirmed_chapter_above_the_agreed_amount_stops_before_posting(self):
+        item_id = self.item()
+        self.undefined(low_after_type="30")                                 # the site's chapter minimum
+        with patch("ablesci.website.reference_check.verify", return_value=self.verified()):
+            self.run_publish(item_id)
+        self.assertEqual(0, self.page.submit.clicks)
+        self.assertStopped(item_id, "min_reward_raised")
+
+    def test_checks_against_the_cited_title_not_a_title_looked_up_from_the_same_doi(self):
+        # a real DOI attached to an invented citation must not pass just because the DOI exists
+        cited = self.item(title="An invented citation about niacin", metadata_ref=dict(title=TITLE))
+        self.undefined()
+        with patch("ablesci.website.reference_check.verify", return_value=self.verified()) as verify:
+            self.run_publish(cited)
+        self.assertEqual("An invented citation about niacin", verify.call_args.args[1])
+        self.assertEqual("cited title", self.store.get(cited)["publish_check"]["reference_check"]["against"])
+
+    def test_doi_only_list_is_checked_for_existence_and_says_so(self):
+        doi_only = self.item(title=TITLE, title_from_metadata=True)
+        self.undefined()
+        with patch("ablesci.website.reference_check.verify", return_value=self.verified()) as verify:
+            self.run_publish(doi_only)
+        self.assertEqual(TITLE, verify.call_args.args[1])
+        self.assertIn("DOI only", self.store.get(doi_only)["publish_check"]["reference_check"]["against"])
+
+    def test_success_after_an_old_retry_clears_the_retry(self):
         item_id = self.item(publish_retry=dict(count=1, next_at="2000-01-01T00:00:00+00:00"))
         self.script(response=dict(code=0), nav=DETAIL)
         self.assertIsNone(self.run_publish(item_id))
         self.assertIsNone(self.store.get(item_id).get("publish_retry"))
 
 
-def pp_minutes():
-    from ablesci.website.browser_agent import BrowserAgent
-    return BrowserAgent.LOOKUP_RETRY_MINUTES
+class ReferenceCheckTests(unittest.TestCase):
+    """reference_check.verify against canned Crossref / PubMed answers (no network)."""
+
+    def fake(self, crossref=None, pmids=(), summary=None, fail=False):
+        def get(url):
+            if fail:
+                raise OSError("offline")
+            if "api.crossref.org" in url:
+                if crossref is None:
+                    raise OSError("404")
+                return dict(message=crossref)
+            if "esearch" in url:
+                return dict(esearchresult=dict(idlist=list(pmids)))
+            return dict(result={pmids[0]: summary})
+        return get
+
+    def test_crossref_chapter_is_verified_with_its_type(self):
+        from ablesci.website import reference_check as rc
+        cr = {"DOI": "10.1007/978-3-030-05325-3_37-1", "title": ["Global Health Risk Factors: Alcohol Consumption"], "type": "book-chapter",
+              "container-title": ["Handbook of Global Health"], "publisher": "Springer", "issued": {"date-parts": [[2020]]},
+              "author": [dict(given="Jürgen", family="Rehm")]}
+        out = rc.verify("10.1007/978-3-030-05325-3_37-1", "Global Health Risk Factors: Alcohol Consumption", self.fake(crossref=cr))
+        self.assertTrue(out["verified"])
+        values = rc.form_values(out["record"])
+        self.assertEqual(("4", "书籍（某章节）"), (values["type_value"], values["type_label"]))
+        self.assertEqual("https://doi.org/10.1007/978-3-030-05325-3_37-1", values["url"])
+        self.assertIn("Handbook of Global Health", values["note"])
+
+    def test_made_up_or_mistyped_references_are_not_verified(self):
+        from ablesci.website import reference_check as rc
+        self.assertFalse(rc.verify("10.9999/made.up", "A paper that does not exist", self.fake())["verified"])          # unknown DOI
+        other = {"DOI": "10.1000/x", "title": ["A completely different paper"], "type": "journal-article"}
+        self.assertFalse(rc.verify("10.1000/x", "The title the citation claims", self.fake(crossref=other))["verified"])  # DOI of another paper
+        self.assertFalse(rc.verify("10.1000/x", "Anything", self.fake(fail=True))["verified"])                         # offline is not a pass
+
+    def test_unknown_doi_is_not_found_rather_than_an_error(self):
+        from urllib.error import HTTPError
+        from ablesci.website import reference_check as rc
+
+        def get(url):
+            if "crossref" in url:
+                raise HTTPError(url, 404, "Not Found", None, None)
+            return dict(esearchresult=dict(idlist=[]))
+        out = rc.verify("10.9999/made.up", "Anything", get)
+        self.assertFalse(out["verified"])
+        self.assertIn("Crossref 查不到该 DOI", out["problems"])
+
+    def test_pubmed_alone_can_confirm_a_journal_article(self):
+        from ablesci.website import reference_check as rc
+        summary = dict(title="Niacin ameliorates hepatic steatosis.", articleids=[dict(idtype="doi", value="10.1093/jn/nxz303")],
+                       fulljournalname="The Journal of nutrition", pubdate="2020 Mar", authors=[dict(name="Ye L")])
+        out = rc.verify("10.1093/jn/nxz303", "Niacin ameliorates hepatic steatosis", self.fake(pmids=["31919223"], summary=summary))
+        self.assertEqual((True, ["PubMed"]), (out["verified"], out["sources"]))
+        self.assertEqual("1", rc.form_values(out["record"])["type_value"])
+
+    def test_type_mapping(self):
+        from ablesci.website import reference_check as rc
+        self.assertEqual(["1", "4", "4", "3", "2", "0", "0"],
+                         [rc.form_type(t) for t in ("journal-article", "book-chapter", "reference-entry", "monograph", "dissertation", "proceedings-article", None)])
 
 
 class McpAuthorizedPipelineTests(unittest.TestCase):

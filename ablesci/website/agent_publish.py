@@ -1,9 +1,10 @@
 """Publishing a request (single paper): lookup layer, reward, confirm prompts, stop/retry (BrowserAgent mixin, moved unchanged from browser_agent.py in refactor stage 3)."""
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from ablesci.flow import intake
 from ablesci.website import publish_policy as pp
+from ablesci.website import reference_check
 from ablesci.flow import settings as app_settings
 from ablesci.flow.core import doi_value, now
 from ablesci.papers.metadata import fetch_metadata
@@ -41,23 +42,47 @@ class PublishMixin:
         self.notify_user(notify_kind, f"publish:{item_id}:{kind}", "求助需处理" if notify_kind == "needs_action" else "最低悬赏上调，待确认", reason)
         raise ValueError(reason)
 
-    LOOKUP_RETRY_MINUTES = (1, 5, 10)
-
-    def publish_retry_later(self, item_id, check):
-        """The lookup layer came back empty ('undefined'): nothing was filled or submitted. Keep the item queued and let the
-        pipeline try again later (1 / 5 / 10 min); only after the last retry does it stop in attention."""
+    def fill_form_from_verified(self, item_id, layer, doi, ref_title, check):
+        """The DOI lookup came back empty: confirm the reference with Crossref / PubMed, close the empty popup and fill the
+        form ourselves (DOI, title, official link, type, authors/source). Not confirmed -> stop, nothing is posted."""
+        # Compare with the title as the list cited it. A title that was itself looked up from this DOI would make the check
+        # circular (a real DOI attached to an invented citation would pass), so then only the DOI's existence is confirmed.
         item = self.store.get(item_id) or {}
-        count = int((item.get("publish_retry") or {}).get("count") or 0) + 1
-        if count > len(self.LOOKUP_RETRY_MINUTES):
-            self.store.update(item_id, publish_retry=dict(item.get("publish_retry") or {}, exhausted=True))
-            self.publish_stop(item_id, "lookup_undefined", "科研通智能提取连续 %d 次返回空结果（undefined），未提交。可稍后用“重新排队”再试，或在科研通手动求助"
-                              % (count - 1), check)
-        delay = self.LOOKUP_RETRY_MINUTES[count - 1]
-        next_at = (datetime.now().astimezone() + timedelta(minutes=delay)).isoformat(timespec="seconds")
-        self.store.update(item_id, status="ready", publish_blocked=False,
-                          publish_retry=dict(count=count, next_at=next_at, kind="lookup_undefined", time=now()),
-                          publish_check=None, note="科研通智能提取返回空结果（undefined），未提交；%d 分钟后自动重试（第 %d 次）" % (delay, count))
-        raise PreconditionError("科研通智能提取返回空结果（undefined），未提交；%d 分钟后自动重试" % delay)
+        cited = "" if item.get("title_from_metadata") else (item.get("title") or "").strip()
+        result = reference_check.verify(doi, cited or ref_title)
+        check["reference_check"] = dict(verified=result["verified"], sources=result["sources"], problems=result["problems"][:6],
+                                        against="cited title" if cited else "DOI only (the list gave no title)")
+        if not result["verified"]:
+            self.publish_stop(item_id, "unverified_reference",
+                              "科研通识别不出该 DOI，Crossref / PubMed 也无法确认这篇文献（%s）。可能是 DOI 写错或文献不存在（例如 AI 编造），未提交。请核对引用"
+                              % "；".join(result["problems"][:3]), check)
+        values = reference_check.form_values(result["record"])
+        check.update(filled_from="、".join(result["sources"]), form_values=values)
+        page = self.page
+        manual = layer.locator("a, button, span").filter(has_text=re.compile(r"^\s*信息有误[，,]?\s*手动填写\s*$"))
+        if manual.count() == 1:
+            manual.first.click()
+        else:
+            close = layer.locator(".layui-layer-close")
+            if close.count():
+                close.first.click()
+        page.wait_for_timeout(500)
+        for selector, value in (("#Assist-doi", values["doi"]), ("#Assist-title", values["title"]), ("#Assist-url", values["url"])):
+            page.locator(selector).fill(value)
+        if values["note"]:
+            page.locator("#Assist-note").fill(values["note"])
+        # layui draws each radio as the <div> right after the hidden <input>; clicking it also updates #point-low
+        page.locator('input[name="Assist[type]"][value="%s"] + div' % values["type_value"]).first.click()
+        page.wait_for_timeout(500)
+        try:
+            chosen = page.locator('input[name="Assist[type]"]:checked').get_attribute("value")
+        except Exception:
+            chosen = None
+        if chosen != values["type_value"]:
+            self.publish_stop(item_id, "form_mismatch", "未能在表单中选中文献类型“%s”，未提交" % values["type_label"], dict(check, form_type=chosen))
+        how = "DOI 与清单中的标题一致" if cited else "DOI 存在（清单只给了 DOI，无法比对引用标题）"
+        self.store.event("科研通识别不出该 DOI；已用 %s 核实：%s（%s），按核实的信息填写表单。" % (check["filled_from"], how, values["type_label"]),
+                         item_id=item_id, kind="publish")
 
     def reference_title(self, item, doi, email):
         """The public (OpenAlex/Crossref) title this item is compared against; '' when none can be had."""
@@ -174,23 +199,26 @@ class PublishMixin:
             check["min_reward_jump"] = True
 
         if pp.lookup_undefined(scraped):
-            self.publish_retry_later(item_id, check)
+            # 科研通 did not recognise the DOI (user rule, 2026-11-10): no blind retries, and never a request for a
+            # reference nobody can confirm. Crossref / PubMed must confirm DOI + title; that record then fills the form.
+            self.fill_form_from_verified(item_id, layer, doi, ref_title, check)
+            scraped.update(doi=doi, type=None, min_reward=None, similarity=None)
+        else:
+            # 2) 二次核对：DOI 精确一致、标题与公开记录 >= 0.90、相似度 >= 50（任何文献类型都可以；费用由最低悬赏规则把关）
+            problems = pp.evaluate_lookup(doi, ref_title, scraped)
+            if problems:
+                self.publish_stop(item_id, "lookup_mismatch", "弹窗中的识别结果与该文献不符，已停止：" + "；".join(problems), dict(check, problems=problems))
+            block = pp.auto_publish_block([scraped["title"]], scraped["doi"])
+            if block:
+                self.publish_stop(item_id, "not_auto", block, check)
 
-        # 2) 二次核对：DOI 精确一致、标题与公开记录 >= 0.90、相似度 >= 50（任何文献类型都可以；费用由最低悬赏规则把关）
-        problems = pp.evaluate_lookup(doi, ref_title, scraped)
-        if problems:
-            self.publish_stop(item_id, "lookup_mismatch", "弹窗中的识别结果与该文献不符，已停止：" + "；".join(problems), dict(check, problems=problems))
-        block = pp.auto_publish_block([scraped["title"]], scraped["doi"])
-        if block:
-            self.publish_stop(item_id, "not_auto", block, check)
-
-        # 3) 填入表单：只点「信息正确，还需修改」（只填表、不发布）；绝不点「信息正确，直接发布」（会跳过本地核对直接提交）
-        buttons = layer.locator("a, button, span").filter(has_text=re.compile(r"^\s*信息正确[，,]\s*还需修改\s*$"))
-        if buttons.count() != 1:
-            buttons = layer.locator(".layui-layer-btn a", has_text=re.compile(r"^\s*(?:确定|确认|使用|填入|填充|采用)"))
-        if buttons.count() != 1:
-            self.publish_stop(item_id, "lookup_confirm", "未找到唯一的“信息正确，还需修改”按钮，未提交。请在页面中手动操作", check)
-        buttons.first.click()
+            # 3) 填入表单：只点「信息正确，还需修改」（只填表、不发布）；绝不点「信息正确，直接发布」（会跳过本地核对直接提交）
+            buttons = layer.locator("a, button, span").filter(has_text=re.compile(r"^\s*信息正确[，,]\s*还需修改\s*$"))
+            if buttons.count() != 1:
+                buttons = layer.locator(".layui-layer-btn a", has_text=re.compile(r"^\s*(?:确定|确认|使用|填入|填充|采用)"))
+            if buttons.count() != 1:
+                self.publish_stop(item_id, "lookup_confirm", "未找到唯一的“信息正确，还需修改”按钮，未提交。请在页面中手动操作", check)
+            buttons.first.click()
         page.wait_for_timeout(800)
         got_doi = doi_value(page.locator("#Assist-doi").input_value())
         got_title = page.locator("#Assist-title").input_value()

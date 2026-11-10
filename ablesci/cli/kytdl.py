@@ -368,8 +368,11 @@ def track(client, target, timeout, emit, interval=3, auto=None):
             batch = batches.get(batch_id or item.get("batch_id") or "")
             status, final = get_row(item, batch, first_decision, now, auto)
             rows.append((item, status, final))
-            if last.get(iid) != status:
-                last[iid] = status
+            # a new note with the same status is news too (real 2026-11-10: "lookup returned empty, retry in 5 min"
+            # kept the paper `queued`, so nothing was reported until the user asked)
+            key = (status, item.get("note") or "")
+            if last.get(iid) != key:
+                last[iid] = key
                 emit(paper_event(item, status, batch_id))
         if rows and all(final for _, _, final in rows):
             return rows, True, batch_id
