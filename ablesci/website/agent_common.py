@@ -40,4 +40,8 @@ def is_transient(exc):
         return True
     if any(c.__name__ == "TargetClosedError" for c in type(exc).__mro__):   # browser was closed (idle close / crash): reopen
         return True
-    return "net::ERR_" in str(exc) or "has been closed" in str(exc)
+    text = str(exc)
+    # the page navigated or re-rendered under us (real 2026-11-10: right after the high-speed confirm the download
+    # page changed and the progress read failed; the next attempt is expected to work)
+    return any(s in text for s in ("net::ERR_", "has been closed", "Execution context was destroyed",
+                                   "most likely because of a navigation", "Frame was detached"))

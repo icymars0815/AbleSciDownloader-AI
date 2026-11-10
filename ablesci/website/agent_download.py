@@ -299,6 +299,8 @@ class DownloadMixin:
             message = str(exc) if isinstance(exc, ValueError) else "下载页面未正常打开，或页面结构已变化"
             failure = explain_failure(message, exc)
             record = dict(kind=failure["kind"], label=failure["label"], advice=failure["advice"], time=now())
+            if not isinstance(exc, ValueError):
+                record["cause"] = ("%s: %s" % (type(exc).__name__, exc))[:300]   # the generic message alone was undiagnosable
             if failure["kind"] == "stopped":
                 self.store.update(item_id, status="attention", download_failure=record)
                 raise
@@ -460,7 +462,13 @@ class DownloadMixin:
             self.page.wait_for_timeout(350)
             if pending:
                 return finish("complete")
-            metrics = read_progress(self.page.locator("body").inner_text(timeout=5000))
+            try:
+                metrics = read_progress(self.page.locator("body").inner_text(timeout=5000))
+            except Exception as exc:
+                # a navigation / re-render while the site switches lines: read again on the next tick (give up after 30 s)
+                if not is_transient(exc) or (time.monotonic() - start > 30 and not last["received"]):
+                    raise
+                continue
             last = metrics
             tick = time.monotonic()
             outcome = watch.observe(tick, metrics["received"], metrics["error"], metrics["total"])

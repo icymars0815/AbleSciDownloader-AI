@@ -366,6 +366,11 @@ class Monitor:
             self.login_required = False
             self.next_due = now + START_DELAY
             self.persist()
+        elif action == "publish" and error is None:
+            # a new request is waiting: never keep an idle slot planned before it existed (real 2026-11-10: the sync
+            # at 19:04 found nothing waiting and planned the next one 30 min later; two answers sat on the site)
+            with self.lock:
+                self.next_due = min(self.next_due, now + self.interval(now)["seconds"])
         if notify and action != "close_idle":
             self.scan(self.items())
 
@@ -432,7 +437,14 @@ class Monitor:
             # is still running it is progress, not yet a request for human intervention.
             in_flight = bool(self.agent.busy and any((item.get(k) or {}).get("status") == "attempted"
                              for k in ("publish_action", "adopt_action", "reject_action")))
-            if stage == "attention" and not in_flight:
+            download_task = ai_review_task(item) if stage == "attention" and self.takeover(prefs) else None
+            if download_task and not in_flight:
+                # AI takeover: a stopped download is the AI's to retry, with the command (real 2026-11-10: it sat stuck)
+                self.notifier.notify("needs_action", iid, "待 AI 重试下载", "%s%s。下一步：%s" % (title, download_task["hint"], download_task["next"]))
+                if download_task["escalate"]:
+                    self.notifier.notify("needs_action", iid + ":escalate", "下载重试已等待 %d 分钟" % download_task["minutes"],
+                                         "%s下载失败后 %d 分钟仍未重试。请让 AI 运行 kytdl inbox 处理，或自己查看。" % (title, download_task["minutes"]))
+            elif stage == "attention" and not in_flight:
                 self.notifier.notify("needs_action", iid, "需处理", title + "需处理：" + str(item.get("note") or item.get("website_status") or "请查看")[:80])
             elif (stage in ("awaiting_decision", "oa_review") and self.takeover(prefs)
                   and not self.auto_adopt_pending(item, prefs) and ai_review_task(item)):

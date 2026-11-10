@@ -168,6 +168,18 @@ class MonitorFlowTests(unittest.TestCase):
         self.finish_sync()
         self.assertEqual((0, T + 600), (self.monitor.failures, self.monitor.next_due))
 
+    def test_a_new_publish_pulls_an_idle_sync_forward(self):
+        self.clock.value = T
+        self.put()
+        self.finish_sync()                                      # nothing waiting: idle, 30 minutes
+        self.assertEqual(T + 1800, self.monitor.next_due)
+        self.put(waiting("a", 5))                               # a request was just published
+        self.clock.value = T + 120
+        self.agent.on_done("publish", "a", None)
+        self.assertEqual(T + 120 + 30, self.monitor.next_due)
+        self.agent.on_done("publish", "a", RuntimeError("x"))   # a failed publish changes nothing
+        self.assertEqual(T + 150, self.monitor.next_due)
+
     def test_failure_notice_only_after_three(self):
         self.store.update_preferences(notify_items={"sync_failed": True})
         for _ in range(2):

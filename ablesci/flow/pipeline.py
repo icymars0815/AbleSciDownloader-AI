@@ -291,6 +291,17 @@ def ai_review_task(item, when=None):
         iid = item["id"]
         nxt = ("kytdl pages %s --pages 1 -> 看图 -> 标题/作者对得上: kytdl resolve %s keep --confirmed（保留）；"
                "不是这篇: kytdl resolve %s request --confirmed（改走科研通）；读不出才告诉用户" % (iid, iid, iid))
+    elif (stage == "attention" and item.get("source") == "website" and item.get("download_failure") and not item.get("pdf")
+          and item.get("request_confirmed") is True):
+        # the answer is there but the download stopped: the AI retries it instead of leaving it stuck (real 2026-11-10)
+        failure = item["download_failure"]
+        when = when or datetime.now().astimezone()
+        since = _time(failure.get("time"))
+        minutes = int((when - since).total_seconds() // 60) if since else None
+        return dict(kind="pending_ai_review", stage="download_failed", since=failure.get("time"), minutes=minutes,
+                    escalate=minutes is not None and minutes >= AI_REVIEW_ESCALATE_MINUTES, preprint_doi="",
+                    next="kytdl retry %s（重新下载；同一文件高速费只扣一次）；连续 2 次仍失败再告诉用户" % item["id"],
+                    hint="下载未完成：%s%s" % (failure.get("label") or "", ("（%s）" % failure["cause"][:120]) if failure.get("cause") else ""))
     else:
         return None
     since = _time(item.get("checked_at"))

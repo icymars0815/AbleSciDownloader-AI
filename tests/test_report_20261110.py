@@ -148,6 +148,44 @@ class CliTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual(TITLE, client.posts[-1][1]["title"])
 
+    def failed_download(self, **extra):
+        item = dict(id="w1", stage="attention", source="website", request_confirmed=True, pdf="",
+                    download_failure=dict(kind="unknown", label="下载未完成", time=datetime.now().astimezone().isoformat(timespec="seconds"),
+                                          cause="Error: Execution context was destroyed"))
+        item.update(extra)
+        return item
+
+    def test_a_stopped_download_is_the_ais_to_retry(self):
+        item = self.failed_download()
+        self.assertEqual(("download_failed", True), kytdl.get_row(item, None, {}, 0))
+        self.assertIn("kytdl retry w1", kytdl.paper_event(item, "download_failed", "b")["next"])
+        with patch("ablesci.flow.pipeline.stage_of", return_value="attention"):
+            task = ai_review_task(item)
+        self.assertEqual(("download_failed", False), (task["stage"], task["escalate"]))
+        self.assertIn("kytdl retry w1", task["next"])
+        self.assertIn("Execution context", task["hint"])
+
+    def test_retry_command_starts_a_download_only_for_a_stopped_one(self):
+        class Client(self.Client):
+            def __init__(self, items):
+                super().__init__({})
+                self.items = items
+
+            def state(self):
+                return dict(items=self.items)
+        client = Client([self.failed_download()])
+        code, data = self.run_cli(["retry", "w1"], client)
+        self.assertEqual((0, True), (code, data["ok"]))
+        self.assertEqual(("/api/browser", {"action": "download", "id": "w1", "mcp_call": True}), client.posts[-1])
+        done = Client([self.failed_download(pdf="downloads/w1/a.pdf")])
+        code, data = self.run_cli(["retry", "w1"], done)
+        self.assertEqual((1, []), (code, done.posts))
+
+    def test_a_page_that_navigated_mid_download_is_transient(self):
+        from ablesci.website.agent_common import is_transient
+        self.assertTrue(is_transient(RuntimeError("Locator.inner_text: Execution context was destroyed, most likely because of a navigation")))
+        self.assertFalse(is_transient(RuntimeError("something else")))
+
     def test_a_submit_in_flight_is_requesting_not_a_question_for_the_user(self):
         item = dict(id="w1", stage="attention", publish_check=dict(kind="submitting"))
         self.assertEqual(("requesting", False), kytdl.get_row(item, None, {}, 0))

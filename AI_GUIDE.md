@@ -103,6 +103,7 @@ kytdl watch <batch_id> --json         # 放到后台运行，每有变化输出�
 | `adopting` | 文件已保存，正在自动核对、采纳 | 等（约 1–2 分钟） |
 | `done` | 完成 | 把 `path` 告诉用户，或复制到用户要的位置并按用户要求改名 |
 | `needs_check` | **待 AI 审核** | 见第 5 节 |
+| `download_failed` | 已有人应助，但下载中断（页面没打开、中途刷新等） | **AI 直接重试**：`kytdl retry <id>`（不会重复扣高速费）。连续 2 次仍失败，再把 `note` 告诉用户。`kytdl status` 的 `pending_ai_review` 也会列出（`stage=download_failed`），15 分钟没人处理会升级提醒 |
 | `needs_points` | 要花的积分超过免确认额度 | `kytdl confirm <batch_id>` 看预览 → 告诉用户要花多少 → 同意后加 `--confirmed` |
 | `needs_person` | 需要用户决定 | 把 `note` 告诉用户。最常见的是网站提高了最低悬赏（`reason=min_reward_raised`），用户同意后 `kytdl confirm <id> --reward <site_min_reward> --confirmed` |
 | `not_requested` | 没有求助 | 看 `note`（例如已有免费全文，或不建议求助） |
@@ -211,6 +212,7 @@ kytdl status --json        # needs_user、pending_ai_review、积分、各批次
 | `kytdl pages <id> [--pages 1,2]` | 把 PDF 页面渲染成 PNG |
 | `kytdl verify <id> --doi … --title-file … --confirmed` | 提交你读到的 DOI / 标题（科研通文件） |
 | `kytdl resolve <id> keep\|request --confirmed` | 免费全文文件：保留或改走科研通 |
+| `kytdl retry <id>` | 下载中断（`download_failed`）后重新下载 |
 | `kytdl inbox [--ack] [--all]` | 待告知用户的结果 |
 | `kytdl open <id> [--folder]` | 替用户打开 PDF 或下载文件夹 |
 | `kytdl events -n 20` | 最近事件日志 |

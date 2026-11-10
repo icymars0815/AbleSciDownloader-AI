@@ -324,6 +324,10 @@ def get_row(item, batch, first_decision, now, auto=0):
         return "needs_check", True
     if (item.get("publish_check") or {}).get("kind") == "submitting":
         return "requesting", False      # a submit in flight is not a question for anyone (test 2026-11-10)
+    if stage == "attention" and item.get("download_failure") and not item.get("pdf"):
+        # the answer is on 科研通 but the download stopped: the AI can retry it (real 2026-11-10: it sat as
+        # needs_person and nobody had a command to move it)
+        return "download_failed", True
     if stage == "attention" or (item.get("oa_check") or {}).get("status") == "needs_human" and not item.get("request_confirmed"):
         return "needs_person", True
     if stage == "awaiting_decision":
@@ -344,6 +348,7 @@ NEXT_FOR = {
     "needs_check": "kytdl pages {id} 看首页图 -> 科研通文件: kytdl verify {id} --doi ... --title ... --confirmed；"
                    "免费全文: AI 自己比对首页的标题/作者，是同一篇就 kytdl resolve {id} keep --confirmed，不是就 request --confirmed",
     "needs_person": "把 note 告诉用户；若是最低悬赏高于已同意金额（site_min_reward），用户同意后 kytdl confirm {id} --reward N --confirmed",
+    "download_failed": "kytdl retry {id}（AI 直接重试；同一文件高速费只扣一次）；连续 2 次仍失败再把 note 告诉用户",
 }
 FINAL_OK = ("done", "not_requested")
 
@@ -486,8 +491,10 @@ def cmd_get(client, args):
             result = client.post("/api/mcp/result", {"id": item["id"]})
             row.update(path=result.get("local_path", ""), verification=(result.get("verification") or {}).get("status"))
         out.append(row)
-    need = [r for r in out if r["status"] in ("needs_points", "needs_check", "needs_person")]
+    need = [r for r in out if r["status"] in ("needs_points", "needs_check", "needs_person", "download_failed")]
     hints = []
+    if any(r["status"] == "download_failed" for r in out):
+        hints.append("download_failed：已有人应助但下载中断，运行 kytdl retry <id> 重试；连续 2 次仍失败再告诉用户")
     if any(r["status"] == "needs_points" for r in out):
         hints.append("needs_points：先运行 kytdl confirm %s 看预览，告诉用户要花多少积分；同意后加 --confirmed" % batch_id)
     if any(r["status"] == "needs_check" for r in out):
@@ -592,10 +599,26 @@ def cmd_resolve(client, args):
     """A free full-text file under review: keep it as the result, or send the paper to 科研通 (the file stays on disk).
     Only after the user agreed (the AI showed what the first page says); request spends nothing by itself."""
     if not args.confirmed:
-        return dict(ok=False, error="先把首页读到的 DOI / 标题告诉用户；用户同意后加 --confirmed", id=args.id, decision=args.decision), BUSINESS
+        return dict(ok=False, error="先看首页图（kytdl pages），确认是不是同一篇后加 --confirmed", id=args.id, decision=args.decision), BUSINESS
     client.post("/api/oa-accept" if args.decision == "keep" else "/api/oa-discard", {"id": args.id, "confirmed": True})
     nxt = "kytdl result %s 取路径" % args.id if args.decision == "keep" else "回到求助队列：kytdl confirm <batch_id> 预览积分"
     return dict(ok=True, id=args.id, decision=args.decision, next=nxt), OK
+
+
+def cmd_retry(client, args):
+    """Download an answered 科研通 file again after the download stopped (status download_failed).
+    Spends nothing new by itself: a high-speed fee is charged once per file and the app's limits still apply."""
+    item = next((i for i in client.state().get("items") or [] if i["id"] == args.id), None)
+    if not item:
+        return dict(ok=False, error="未找到条目：" + args.id), BUSINESS
+    if item.get("pdf") or item.get("stage") not in ("attention", "fulfilled") or not item.get("download_failure"):
+        return dict(ok=False, id=args.id, stage=item.get("stage"), error="这篇没有停在下载失败，不需要重试",
+                    next="kytdl result %s 看当前状态" % args.id), BUSINESS
+    try:
+        client.post("/api/browser", {"action": "download", "id": args.id, "mcp_call": True})
+    except ApiError as exc:
+        return dict(ok=False, id=args.id, error=str(exc), next="有其他网页操作在进行，1–2 分钟后再运行 kytdl retry %s" % args.id), BUSINESS
+    return dict(ok=True, id=args.id, retrying=True, next="kytdl watch %s --json 跟进（或稍后 kytdl inbox）" % args.id), OK
 
 
 def parser():
@@ -689,6 +712,9 @@ def parser():
     s.add_argument("decision", choices=("keep", "request"))
     s.add_argument("--confirmed", action="store_true")
     s.set_defaults(run=cmd_resolve)
+    s = sub.add_parser("retry", parents=[common], help="download an answered 科研通 file again after the download stopped")
+    s.add_argument("id")
+    s.set_defaults(run=cmd_retry)
     s = sub.add_parser("login", parents=[common], help="open the 科研通 login window for the user (captcha / WeChat)")
     s.set_defaults(run=cmd_login)
     s = sub.add_parser("sync", parents=[common], help="read-only sync of the own-requests list now")
